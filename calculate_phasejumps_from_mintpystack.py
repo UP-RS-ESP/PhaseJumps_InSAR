@@ -393,11 +393,11 @@ def analyse_PhaseJump_by_date(inps):
     date12phase_jumps_final = list(median_pery_perpair.pair.values)
 
     print(
-        "\n>> Redefining significative unwrap phase jumps.\n*Total of pairs found with significative phase jumps: %s\n"
+        "\n>> Redefining significant unwrap phase jumps.\n*Total of pairs found with significant phase jumps: %s\n"
         % len(date12phase_jumps_final)
     )
     print(
-        "\n Phase jump is significative if the median jump of the line is >%s mm\n"
+        "\n Phase jump is significant if the median jump of the line is >%s mm\n"
         % np.round(median_threshold, 2)
     )
 
