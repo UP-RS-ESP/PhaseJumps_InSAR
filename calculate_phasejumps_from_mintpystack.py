@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # ------------------------#
-# Author Sofia Viotto
-# Year: 2024
+# Author Sofia Viotto, Bodo Bookhagen
+# V0.1 Oct-2024
 
 
 import warnings
@@ -107,8 +107,6 @@ def check_inputs(inps):
 
 
 # -------Plot fuctions
-
-
 def PlotData_UnwGradient(inps):
     # Arrays
     ds_unw = inps["ds_unw"]
@@ -522,7 +520,7 @@ def save_global_stats2txt(inps):
     # Save Txt file with stats from Azimuth Gradient
     outFile = os.path.join(inps["in_dir"], "stats_absolute_gradient.txt")
 
-    header = "#No Data Values (Zero Values) were skipped from all calculations \n"
+    header = "# No Data Values (Zero Values) were skipped from all calculations \n"
     header += "# Coherence statistics were retrieved from all No Nans pixels .\n"
     header += "# Pixels with coherence <0.75 were masked out in the calculation of the absolute Azimuth Gradient statistics and corresponding severity.\n"
     header += "# The number of masked-out pixels varies from pair to pair.\n"
@@ -550,7 +548,6 @@ def save_global_stats2txt(inps):
             filehandle.write(line)
 
 
-# -------------------------#
 @nb.njit(parallel=True)
 def diff_along_azimuth(ds_unw):
     # ds_grad_az in shape (time,rows-Y,cols-X)
@@ -578,12 +575,10 @@ def stats_ds_unw(ds_unw):
         stats[n, 1] = np.round(np.nanmean(array), 2)
         stats[n, 2] = np.round(np.nanstd(array), 2)
         # stats[n,3]=np.count_nonzero(~np.isnan(array))
-
     return stats
 
 
 def readData2VerticalGradient(inps):
-
     # ----------------Define parameters
     stack_fname = inps["stack_fname"]
     pbar = inps["pbar"]
@@ -1071,7 +1066,7 @@ def run(inps):
             # -------------------------
             # Find the severity files per date as reference/secondary
             # -------------------------
-            print("\n>> Analizing dicontinuities per date ..\n")
+            print("\n>> Analyzing dicontinuities for each date ..\n")
             analyse_PhaseJump_by_date(inps)
         # --------------------
         # Plot unwrapPhase next to gradient and severity of discontinuity
