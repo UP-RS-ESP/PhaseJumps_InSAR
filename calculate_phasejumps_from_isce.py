@@ -35,6 +35,7 @@ def abs_gradient_forloop(data):
         grad_az_stats[n,1] = np.std(grad_az[n,:])
     return grad_az_stats
 
+# using GPU via cupy
 def abs_gradient_complex_gpu(data):
     data_gpu = cp.asarray(data)
     # get phase from complex data

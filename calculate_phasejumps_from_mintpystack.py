@@ -63,7 +63,7 @@ parser.add_argument(
 parser.add_argument(
     "--plotIndividual",
     dest="plotIndividual",
-    help="plot individual interferograms next to gradient along the azimuth direction \n",
+    help="plot individual interferograms next to gradient along the azimuth direction",
     action="store_true",
 )
 parser.add_argument("--pair", "-p", default=None, help="Input pair", dest="pair")
