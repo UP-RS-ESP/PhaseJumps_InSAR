@@ -3,7 +3,7 @@
 """
 Created on Tue Aug 29 15:32:10 2023
 
-@author: sofia
+@author: Sofia Viotto
 """
 
 from mintpy.objects import ifgramStack
@@ -13,7 +13,7 @@ import os
 
 # -------------------------
 parser = argparse.ArgumentParser(
-    description="Create list of interferograms to exclude \n after list of pairs as date2_date1",
+    description="Create list of interferograms to exclude with list of pairs as date2_date1",
 )
 parser.add_argument(
     "-l",
@@ -23,7 +23,7 @@ parser.add_argument(
     default=None,
 )
 parser.add_argument(
-    "-i", "--inDir", dest="inDir", help="Directory that contains \n input/ifgramStackh5"
+    "-i", "--inDir", dest="inDir", help="Directory that contains input/ifgramStackh5"
 )
 args = parser.parse_args()
 
