@@ -176,7 +176,7 @@ def reportSafe(safe_list):
         with open(report_out, "w") as fl:
             for item in list_scenes_out:
                 fl.write("%s\n" % item)
-                fl.close()
+        #fl.close()
         print(
             "A file to exclude dates by IPF versions was created \n exclude_by_IPF.txt"
         )
@@ -187,7 +187,7 @@ def reportSafe(safe_list):
 
         with open("exclude_by_IPF.txt", "w") as fl:
             fl.write(string_out)
-            fl.close()
+        #fl.close()
     else:
         print("There is not images with IPF versions below 2.6")
 
