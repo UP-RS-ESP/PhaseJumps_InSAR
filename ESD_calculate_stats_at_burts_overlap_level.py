@@ -9,14 +9,36 @@ import warnings
 warnings.filterwarnings("ignore")
 import numpy as np
 import pandas as pd
-import os,glob
+import os,glob, time, logging
 import xarray as xr
 import argparse
+import matplotlib.pyplot as plt
+from argparse import RawTextHelpFormatter
+
+logging.basicConfig(
+    format='%(asctime)s %(levelname)-8s %(message)s',
+    level=logging.INFO,
+    datefmt='%Y-%m-%d %H:%M:%S')
+
+#---------------------------
+EXAMPLE = """example:
+python ESD_calculate_stats_at_burst_overlap_level.py \
+    --inDir /Home/ISCE_processing/ESD
+
+"""
+
+DESCRIPTION = """
+Calculates statistics from Enhanced Spectral Diversity (ESD) files used to proper align the sences (stackSentinel.py tool from ISCE).  
+The script processes ESD files to extract median values, standard deviations, and coherence points, at burst overlaps levels. 
+
+Oct-2024, Sofia Viotto (viotto1@uni-potsdam.de)
+"""
+#-------------------------
 
 parser = argparse.ArgumentParser(
-                    description='Calculate stats from ESD files',
+                    description=DESCRIPTION, epilog=EXAMPLE, formatter_class=RawTextHelpFormatter
                     )
-parser.add_argument('--inDir', '-i',dest='inDir',help='Parent directory that contains the ESD folder')
+parser.add_argument('--inDir', '-i',dest='inDir',help='Full path to the ESD folder')
 args = parser.parse_args()
 
 #------------------------------------------------#
@@ -24,17 +46,24 @@ args = parser.parse_args()
 
 def check_input_directories(inps):
     skip=False
+    # Check if the main input directory exists
     if os.path.exists(inps['inDir']) is False:
         skip=True
-        print('Input Directory does not exist \n')
-    if os.path.exists(os.path.join(inps['inDir'],'spreadsheet_csv')) is False:
-        os.mkdir(os.path.join(inps['inDir'],'spreadsheet_csv'))
+        #logging.info('Input Directory does not exist \n')
+        logging.info('Input Directory does not exis\n')
+        return inps,skip
+    # Create ESD_azimuth_offsets directory if not found
+    elif os.path.exists(os.path.join(inps['inDir'],'ESD_azimuth_offsets')) is False:
+        os.mkdir(os.path.join(inps['inDir'],'ESD_azimuth_offsets'))
+        
+    # Check if the ESD directory exists
     if os.path.exists(inps['ESD_dir']) is False:
         skip=True
-        print('ESD directory not found \n')
+        logging.info('ESD directory not found \n')
+        return inps,skip
         
     else:
-        #Define the sub-swath based on the folder ESD
+        # Identify sub-swaths based on the ESD folder
         ESD_pairs_folders=sorted(glob.glob(os.path.join(inps['ESD_dir'],'2*','IW*')))
         
         subswath_list=[os.path.basename(i) for i in ESD_pairs_folders]
@@ -43,62 +72,147 @@ def check_input_directories(inps):
             ESD_offset_filename=sorted(glob.glob(os.path.join(inps['ESD_dir'],'2*',iw,'combined.off.vrt')))
             if len(ESD_pairs_folders)!=len(ESD_offset_filename):
                 skip=True
-                print('Skiping. Number of pairs inside the ESD parent folder different to Number of combined.off.vrt files \n ')
-            else:
-                inps['sub_swath']=list(subswath_unique)
-    return inps,skip
+                logging.info('Skipping. Number of pairs in the ESD folder differs from the number of combined.off.vrt files \n ')
+                return inps,skip
+            
+            inps['sub_swath']=list(subswath_unique)
+            logging.info('Sub-swath found {}\n'.format(subswath_unique))
+            return inps,skip
 
 def MAD(x):
     med = np.median(x)
     x   = abs(x-med)
     MAD = np.median(x)
     return MAD
+
 def IQR(x):
     return np.nanpercentile(x,75)-np.nanpercentile(x,25)
 
+def plot_distribution_per_burst_overlap(df_stats_medians,df_coh_points,sub_swath,inps):
     
+    boxprops = dict(facecolor='lightblue', color='black', linewidth=0.75)
+    medianprops = dict(color='red', linewidth=1)
+    whiskerprops = dict(color='black', linewidth=0.75)
+    capprops = dict(color='black', linewidth=0.75)
+    import matplotlib.ticker as mticker
+    median_max=np.nanmax(df_stats_medians.iloc[:, :-9])
+
+    fig,axs=plt.subplots(nrows=2,figsize=(8,15/2.54))
+    # First boxplot (for medians)
+    axs[0].boxplot(df_stats_medians.iloc[:, :-9].values, patch_artist=True,  boxprops=boxprops, 
+               medianprops=medianprops, whiskerprops=whiskerprops, capprops=capprops)
+    axs[0].set_ylabel('Median Offset Azimuth [px]')
+    axs[0].set_ylim(0,np.round(median_max,2))
+    axs[0].set_title('Medians')
+
+
+    # Second boxplot (for coherent points)
+    axs[1].boxplot(df_coh_points.iloc[:, :-4].values, patch_artist=True,  boxprops=boxprops, 
+               medianprops=medianprops, whiskerprops=whiskerprops, capprops=capprops)
+    axs[1].set_ylabel('#Points Coh >0.85')
+    axs[1].set_title('Coherent Points')
+    
+    # Rotate x-axis labels
+    for ax in axs:
+        ax.set_xlabel('Burst Overlapping Area')
+        ax.tick_params(axis='x', labelrotation=90)
+    axs[1].yaxis.set_major_formatter(mticker.ScalarFormatter(useMathText=True))
+    axs[1].ticklabel_format(style='sci', axis='y', scilimits=(0, 0))
+    # Set the main title and format the figure
+    fig.suptitle('Statistics on Each Burst Overlap (Sub-swath {})'.format(sub_swath), fontsize=12)
+    
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+    fig.savefig(os.path.join(inps['inDir'],'ESD_azimuth_offsets/','boxplot_stats_at_burst_overlapping_area_{}.png'.format(sub_swath)),dpi=300)
+def report_pairs(df_stats_medians,inps):
+    #mads=df_stats_medians.groupby('RefDate')['MAD_px'].median()
+    threshold=0.0009#np.nanpercentile(mads, 99)
+    pairs=df_stats_medians[df_stats_medians['MAD_px']>=threshold].index.to_list().copy()
+    out_report=os.path.join(inps['inDir'],'exclude_pairs_ESD.txt')
+    with open(out_report,'w') as fl:
+        fl.write('Pairs with Median Absolute Deviation MAD larger than {}\n'.format(threshold))
+        fl.write("\n".join(pairs))
+        
+    
+def plot_histograms_of_global_variables(df_stats_medians,df_coh_points,sub_swath,inps):
+    
+
+    fig,axs=plt.subplots(nrows=2,figsize=(8,15/2.54))
+    # First boxplot (for medians)
+    values=df_stats_medians['MAD_px'].values.flatten()
+    n_bins=20
+    axs[0].hist(values,bins=n_bins)
+    axs[0].set_ylabel('Frequency (log-scale)')
+    axs[0].set_yscale('log')
+    axs[0].set_xlabel('MAD per pair [px]')
+    axs[0].set_title('Median Absolute Deviation of Burst Overlap')
+    p75=np.nanpercentile(values,75)
+    axs[0].axvline(p75,c='orange',lw=1,label='75th %ile')
+    p90=np.nanpercentile(values,90)
+    axs[0].axvline(p90,c='red',lw=1,label='90th %ile')
+    #axs[0].text(p90, axs[0].get_ylim()[1]/3, '90th %ile', color='red', ha='center', va='center',rotation=90)
+
+    p95=np.nanpercentile(values,95)
+    axs[0].axvline(p95,c='red',lw=1,ls='--',label='95th %ile')
+    #axs[0].text(p95, axs[0].get_ylim()[1]/3, '95th %ile', color='red', ha='center', va='center',rotation=90)
+
+    accuracy_threshold=0.0009
+    axs[0].axvline(accuracy_threshold,c='k',lw=1,label='Accuracy Thresh.')
+    axs[0].legend()
+    #axs[0].text(accuracy_threshold, axs[0].get_ylim()[1]/3, 'Accuracy Thresh.', color='red', ha='center', va='center',rotation=90)
+
+    # Second boxplot (for coherent points)
+    values=df_coh_points['TotalCohPts'].values
+    axs[1].hist(values,bins=n_bins)
+    axs[1].set_ylabel('Frequency (log-scale)')
+    axs[0].set_yscale('log')
+    axs[1].set_xlabel('Total of Coherent Points per pair')
+    axs[1].set_title('Coherent Points')
+    
+
+    # Set the main title and format the figure
+    fig.suptitle('Statistics on Each Burst Overlap (Sub-swath {})'.format(sub_swath), fontsize=12)
+    
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+    fig.savefig(os.path.join(inps['inDir'],'ESD_azimuth_offsets/','histograms_stats_at_burst_overlapping_area_{}.png'.format(sub_swath)),dpi=300)
+
+
 def calculate_median_ESD_per_burst(combined_fname):
-    #For each pair, open 
-    #combined.off: combined azimuth offset file after ESD, 
-    #combined.cor: combined coherence at the burst overlapping areas after ESD
-    #combined.int: combined double difference interferogram used to retrieve the combined azimuth offset
-    
+    """
+    Calculates median ESD statistics for each burst overlap.
+
+    Parameters:
+    combined_fname (str): Filename of the combined offset file.
+
+    Returns:
+    Tuple containing medians, standard deviations, coherent points, and the number of burst overlaps.
+    """
+    # Load the combined offset, coherence, and interferogram files
     ESD_off=xr.open_dataarray(combined_fname)
     ESD_cor=xr.open_dataarray(combined_fname.replace('.off.vrt','.cor.vrt'))
     ESD_int=xr.open_dataarray(combined_fname.replace('.off.vrt','.int.vrt'))
     
-    #------
-    #STEP 1:
-    #combined.off: every burst overlap is separated by rows filled with zero data values
-    #Use a lower threshold of coherence as we want to detect the coordinates of every burst 
-    #overlapping area
-    #Then combine coherence and double difference interferograms to define those coordinates
-   
+    # Step 1: Mask combined offsets with coherence and interferogram thresholds
     ESD_off=ESD_off.where(ESD_cor>0.3)
     ESD_off=ESD_off.where(np.angle(ESD_int)>0)
     ESD_off=ESD_off.squeeze()
    
-    #Retrieve coordinates of every burst overlapping area by calculating the maximum per
-    #row. 
-    #If the value is zero== the row is filled with zero values
-    #If the value is not zero== the row belongs to a burst overlapping area
+    # Retrieve burst overlap coordinates
     max_per_coordinates=ESD_off.max(dim='x')
     
     #Keep the coordinates were maximum values are different from zero
     coordinates=max_per_coordinates[(max_per_coordinates.notnull())].y.values
 
-    #Group coordinates to find the range along the y dimension that separates every
+    #Group coordinates to find the y-coordinate ranges along that separates every
     #burst overlap
     coordinates_split=np.split(coordinates, np.where(np.diff(coordinates) >1)[0] + 1)
     number_brst_ovlp=len(coordinates_split)
 
-    #--------------------------------
-    #STEP 2:
-    # keep only the pixels with coherence => 0.85,
-    #as the threshold used during calculations with ESD
+    # Step 2: Filter pixels with coherence >= 0.85 (ESD threshold)
     ESD_off=ESD_off.where(ESD_cor>0.849)
     
-    # Retrieve median, std and number of coherence points (i.e. values not masked out) at burst overlap level
+    # Calculate median, std, and number of coherent points per burst overlap
     medians=[]
     std=[]
     coh_points=[]
@@ -106,10 +220,18 @@ def calculate_median_ESD_per_burst(combined_fname):
         medians.append(np.nanmedian(ESD_off.sel(y=group).data))
         std.append(np.nanstd(ESD_off.sel(y=group).data))
         coh_points.append(np.count_nonzero(~np.isnan(ESD_off.sel(y=group).data)))
+        
     return medians,std,coh_points,number_brst_ovlp
 
 def calculate_stats_by_subwath(inps,sub_swath):
-    #Find files
+    """
+    Calculates and saves ESD statistics for each sub-swath.
+
+    Parameters:
+        inps (dict): Input directory paths.
+        sub_swath (str): Sub-swath identifier.
+    """
+    # Find files in the ESD directory
     ESD_offset_filename=sorted(glob.glob(os.path.join(inps['ESD_dir'],'2*',sub_swath,'combined.off.vrt')))
     n_pairs=len(ESD_offset_filename)
     medians,std,coh_points,n_brst_ovlp=[],[],[],[]
@@ -120,14 +242,15 @@ def calculate_stats_by_subwath(inps,sub_swath):
         std.extend(std_brst_ovlp)
         coh_points.extend(coh_point_brst_ovlp)
         n_brst_ovlp.append(number_brst_ovlp)
-        #Check all values number of burst overlap are the same among different pairs
         
+    #Check number of burst overlapping areas
     if len(set(n_brst_ovlp)) == 1:
-        print('Number of burst overlaping areas found {} at sub-swath {}\n'.format(n_brst_ovlp[0],sub_swath))
+        logging.info(f'Number of burst overlapping areas found: {n_brst_ovlp[0]} ({sub_swath})\n')
     else:
-        print('Error found during calculations \n')
-
-    #Reshape lists to arrays
+        logging.info('Error found during calculations.\n')
+        
+    
+    # Reshape lists 
     std=np.asarray(std).reshape(n_pairs,n_brst_ovlp[0])
     medians=np.asarray(medians).reshape(n_pairs,n_brst_ovlp[0])
     coh_points=np.asarray(coh_points).reshape(n_pairs,n_brst_ovlp[0])
@@ -135,16 +258,17 @@ def calculate_stats_by_subwath(inps,sub_swath):
     
     #Coordinates are always read from the first burst overlapping area to the last one
     burst_overlap=['BstOvlp' + str(i) for i in range(1,n_brst_ovlp[0]+1)]
+    
     #--------------------------------------#
     #Prepare dataframe and save them
-
+    #Dataframe of median azimuth offset per burst overlapping areas
     df_stats_medians=pd.DataFrame(medians,columns=burst_overlap,index=pairs)
     df_stats_medians=df_stats_medians.add_prefix('MedianAzOff_')
-    df_stats_medians=df_stats_medians.add_suffix('[px]')
-    
+    df_stats_medians=df_stats_medians.add_suffix('_px')
+    #Dataframe
     df_stats_std=pd.DataFrame(std,columns=burst_overlap,index=pairs)
     df_stats_std=df_stats_std.add_prefix('StdAzOff_')
-    df_stats_std=df_stats_std.add_suffix('[px]')
+    df_stats_std=df_stats_std.add_suffix('_px')
     
     df_coh_points=pd.DataFrame(coh_points,columns=burst_overlap,index=pairs)
     df_coh_points=df_coh_points.add_prefix('CohPts_')
@@ -159,45 +283,66 @@ def calculate_stats_by_subwath(inps,sub_swath):
         iqrs.append(IQR(df_stats_medians_T[i].values))
     
     #Add MADs,IQRs, Range of medians across burst overlapping areas to dataframe
+    df_stats_medians['MAD_px']=mads
+    df_stats_medians['IQR_px']=iqrs
     
-    df_stats_medians['MAD[px]']=mads
-    df_stats_medians['IQR[px]']=iqrs
-    df_stats_medians['Range(Max-Min)']=df_stats_medians.max(axis=1)-df_stats_medians.min(axis=1)
     
     #Add other parameters
-    df_stats_medians['Ref_Date']= [pd.to_datetime(i.split('_')[0],format='%Y%m%d') for i in df_stats_medians.index.tolist()]
-    df_stats_medians['Ref_Date_Month']= df_stats_medians['Ref_Date'].dt.month
+    df_stats_medians['RefDate']= [pd.to_datetime(i.split('_')[0],format='%Y%m%d') for i in df_stats_medians.index.tolist()]
+    df_stats_medians['RefDate_month']= df_stats_medians['RefDate'].dt.month
 
-    df_stats_medians['Sec_Date']= [pd.to_datetime(i.split('_')[1],format='%Y%m%d') for i in df_stats_medians.index.tolist()]
-    df_stats_medians['Sec_Date_Month']= df_stats_medians['Sec_Date'].dt.month
+    df_stats_medians['SecDate']= [pd.to_datetime(i.split('_')[1],format='%Y%m%d') for i in df_stats_medians.index.tolist()]
+    df_stats_medians['SecDate_month']= df_stats_medians['SecDate'].dt.month
 
-    df_stats_medians['Ref_Date_Year']= df_stats_medians['Ref_Date'].dt.year
-    df_stats_medians['Sec_Date_Year']= df_stats_medians['Sec_Date'].dt.year
+    df_stats_medians['RefDate_year']= df_stats_medians['RefDate'].dt.year
+    df_stats_medians['SecDate_year']= df_stats_medians['SecDate'].dt.year
 
-    df_stats_medians['Bt(days)']=(df_stats_medians['Sec_Date']-df_stats_medians['Ref_Date']).dt.days
+    df_stats_medians['Bt_days']=(df_stats_medians['SecDate']-df_stats_medians['RefDate']).dt.days
     
     #----------------------------------------------#
     #Prepare the dataframe of coherent points per burst overlap
-    df_coh_points['Sum_Coh_points']=df_coh_points.sum(axis=1)
-    df_coh_points['Ref_Date']=df_stats_medians['Ref_Date'].copy()
-    df_coh_points['Sec_Date']=df_stats_medians['Sec_Date'].copy()
-    df_coh_points['Bt(days)']=df_stats_medians['Bt(days)'].copy()
+    df_coh_points['TotalCohPts']=df_coh_points.sum(axis=1)
+    df_coh_points['RefDate']=df_stats_medians['RefDate'].copy()
+    df_coh_points['SecDate']=df_stats_medians['SecDate'].copy()
+    df_coh_points['Bt_days']=df_stats_medians['Bt_days'].copy()
     
     #--------------------------------------------------#
     #Save dataframes  
-
-    df_stats_medians.to_csv(os.path.join(inps['inDir'],'spreadsheet_csv/ESD_azimuth_offset_medians_pairs_{}.csv'.format(sub_swath)))
-    df_stats_std.to_csv(os.path.join(inps['inDir'],'spreadsheet_csv/ESD_azimuth_offset_std_pairs_{}.csv'.format(sub_swath)))
-    df_coh_points.to_csv(os.path.join(inps['inDir'],'spreadsheet_csv/ESD_azimuth_offset_nonan_pairs_{}.csv'.format(sub_swath)))
-
-
+    logging.info('Saving dataframes \n')
+    df_stats_medians.to_csv(os.path.join(inps['inDir'],'ESD_azimuth_offsets/ESD_azimuth_offset_medians_pairs_{}.csv'.format(sub_swath)),
+                            float_format='%.15f')
+    df_stats_std.to_csv(os.path.join(inps['inDir'],'ESD_azimuth_offsets/ESD_azimuth_offset_std_pairs_{}.csv'.format(sub_swath)),
+                        float_format='%.15f')
+    df_coh_points.to_csv(os.path.join(inps['inDir'],'ESD_azimuth_offsets/ESD_azimuth_offset_coh_points_pairs_{}.csv'.format(sub_swath)),
+                         float_format='%.15f')
+    
+    #--------------------------------------------------#
+    #Save summaries from dataframes
+    df_stats_medians_describe=df_stats_medians.iloc[:,:-7].describe()
+    df_stats_medians_describe.to_csv(os.path.join(inps['inDir'],'ESD_azimuth_offsets/summary_ESD_azimuth_offset_medians_pairs_{}.csv'.format(sub_swath)),
+                                     float_format='%.15f')
+    df_coh_points_describe=df_coh_points.iloc[:,:-7].describe()
+    df_stats_medians_describe.to_csv(os.path.join(inps['inDir'],'ESD_azimuth_offsets/summary_ESD_azimuth_offset_coh_points_pairs_{}.csv'.format(sub_swath)),
+                                     float_format='%.15f')
+    #-----------------------------------------------------#
+    #Plot
+    logging.info('Plotting figures \n')
+    plot_distribution_per_burst_overlap(df_stats_medians,df_coh_points,sub_swath,inps)
+    plot_histograms_of_global_variables(df_stats_medians,df_coh_points,sub_swath,inps)
+    
+    #----------------------------------------------------#
+    #Report
+    logging.info('Reporting pairs with large MAD of Azimuth Offset \n')
+    report_pairs(df_stats_medians,inps)
+    
 def run():
     
-    inps={'inDir':args.inDir,
-          'ESD_dir':os.path.join(args.inDir,'ESD')}
-    
+    inps={'inDir':os.path.dirname(os.path.abspath(args.inDir)),
+          'ESD_dir':os.path.abspath(args.inDir)}
+    logging.info('Checking input parameters\n')
     inps,skip=check_input_directories(inps)
     if skip==False:
+        logging.info('Retrieving burst overlap statistics at the sub-swath level\n')
         for sub_swath in inps['sub_swath']:
             calculate_stats_by_subwath(inps,sub_swath)
         
