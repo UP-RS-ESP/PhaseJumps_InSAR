@@ -23,8 +23,12 @@ logging.basicConfig(
 #---------------------------
 EXAMPLE = """example:
 python ESD_calculate_stats_at_burst_overlap_level.py \
-    --inDir /Home/ISCE_processing/ESD
-
+    --inDir /Home/ISCE_processing/ESD 
+    
+python ESD_calculate_stats_at_burst_overlap_level.py \
+    --inDir /Home/ISCE_processing/ESD  --subwath IW1 
+python ESD_calculate_stats_at_burst_overlap_level.py \
+    --inDir /Home/ISCE_processing/ESD  --subwath IW1 IW2 
 """
 
 DESCRIPTION = """
@@ -39,6 +43,9 @@ parser = argparse.ArgumentParser(
                     description=DESCRIPTION, epilog=EXAMPLE, formatter_class=RawTextHelpFormatter
                     )
 parser.add_argument('--inDir', '-i',dest='inDir',help='Full path to the ESD folder')
+parser.add_argument('--subswath', '-s',dest='subswath',
+                    help='Optional. Define a sub-swath to calculate statistics',
+                    nargs='+',default=None)
 args = parser.parse_args()
 
 #------------------------------------------------#
@@ -50,7 +57,7 @@ def check_input_directories(inps):
     if os.path.exists(inps['inDir']) is False:
         skip=True
         #logging.info('Input Directory does not exist \n')
-        logging.info('Input Directory does not exis\n')
+        logging.info('Input Directory does not exis.')
         return inps,skip
     # Create ESD_azimuth_offsets directory if not found
     elif os.path.exists(os.path.join(inps['inDir'],'ESD_azimuth_offsets')) is False:
@@ -59,24 +66,28 @@ def check_input_directories(inps):
     # Check if the ESD directory exists
     if os.path.exists(inps['ESD_dir']) is False:
         skip=True
-        logging.info('ESD directory not found \n')
+        logging.info('ESD directory not found')
         return inps,skip
         
     else:
         # Identify sub-swaths based on the ESD folder
-        ESD_pairs_folders=sorted(glob.glob(os.path.join(inps['ESD_dir'],'2*','IW*')))
+        ESD_pairs_folders=sorted(glob.glob(os.path.join(inps['ESD_dir'],'2*')))
+        if inps['subswath']==None:
+            ESD_pairs_subswath_folders=sorted(glob.glob(os.path.join(inps['ESD_dir'],'2*','IW*')))
         
-        subswath_list=[os.path.basename(i) for i in ESD_pairs_folders]
-        subswath_unique=np.unique(subswath_list)
+            subswath_list=[os.path.basename(i) for i in ESD_pairs_subswath_folders]
+            subswath_unique=np.unique(subswath_list)
+        else:
+            subswath_unique=inps['subswath']
         for iw in subswath_unique:
             ESD_offset_filename=sorted(glob.glob(os.path.join(inps['ESD_dir'],'2*',iw,'combined.off.vrt')))
             if len(ESD_pairs_folders)!=len(ESD_offset_filename):
                 skip=True
-                logging.info('Skipping. Number of pairs in the ESD folder differs from the number of combined.off.vrt files \n ')
+                logging.info('Skipping. Number of pairs in the ESD folder differs from the number of combined.off.vrt files.')
                 return inps,skip
             
-            inps['sub_swath']=list(subswath_unique)
-            logging.info('Sub-swath found {}\n'.format(subswath_unique))
+            inps['subswath']=list(subswath_unique)
+            logging.info('Sub-swath found {}'.format(subswath_unique))
             return inps,skip
 
 def MAD(x):
@@ -88,7 +99,7 @@ def MAD(x):
 def IQR(x):
     return np.nanpercentile(x,75)-np.nanpercentile(x,25)
 
-def plot_distribution_per_burst_overlap(df_stats_medians,df_coh_points,sub_swath,inps):
+def plot_distribution_per_burst_overlap(df_stats_medians,df_coh_points,subswath,inps):
     
     boxprops = dict(facecolor='lightblue', color='black', linewidth=0.75)
     medianprops = dict(color='red', linewidth=1)
@@ -119,11 +130,11 @@ def plot_distribution_per_burst_overlap(df_stats_medians,df_coh_points,sub_swath
     axs[1].yaxis.set_major_formatter(mticker.ScalarFormatter(useMathText=True))
     axs[1].ticklabel_format(style='sci', axis='y', scilimits=(0, 0))
     # Set the main title and format the figure
-    fig.suptitle('Statistics on Each Burst Overlap (Sub-swath {})'.format(sub_swath), fontsize=12)
+    fig.suptitle('Statistics on Each Burst Overlap (Sub-swath {})'.format(subswath), fontsize=12)
     
     plt.tight_layout(rect=[0, 0, 1, 0.95])
 
-    fig.savefig(os.path.join(inps['inDir'],'ESD_azimuth_offsets/','boxplot_stats_at_burst_overlapping_area_{}.png'.format(sub_swath)),dpi=300)
+    fig.savefig(os.path.join(inps['inDir'],'ESD_azimuth_offsets/','boxplot_stats_at_burst_overlapping_area_{}.png'.format(subswath)),dpi=300)
 def report_pairs(df_stats_medians,inps):
     #mads=df_stats_medians.groupby('RefDate')['MAD_px'].median()
     threshold=0.0009#np.nanpercentile(mads, 99)
@@ -134,7 +145,7 @@ def report_pairs(df_stats_medians,inps):
         fl.write("\n".join(pairs))
         
     
-def plot_histograms_of_global_variables(df_stats_medians,df_coh_points,sub_swath,inps):
+def plot_histograms_of_global_variables(df_stats_medians,df_coh_points,subswath,inps):
     
 
     fig,axs=plt.subplots(nrows=2,figsize=(8,15/2.54))
@@ -171,11 +182,11 @@ def plot_histograms_of_global_variables(df_stats_medians,df_coh_points,sub_swath
     
 
     # Set the main title and format the figure
-    fig.suptitle('Statistics on Each Burst Overlap (Sub-swath {})'.format(sub_swath), fontsize=12)
+    fig.suptitle('Statistics on Each Burst Overlap (Sub-swath {})'.format(subswath), fontsize=12)
     
     plt.tight_layout(rect=[0, 0, 1, 0.95])
 
-    fig.savefig(os.path.join(inps['inDir'],'ESD_azimuth_offsets/','histograms_stats_at_burst_overlapping_area_{}.png'.format(sub_swath)),dpi=300)
+    fig.savefig(os.path.join(inps['inDir'],'ESD_azimuth_offsets/','histograms_stats_at_burst_overlapping_area_{}.png'.format(subswath)),dpi=300)
 
 
 def calculate_median_ESD_per_burst(combined_fname):
@@ -223,16 +234,17 @@ def calculate_median_ESD_per_burst(combined_fname):
         
     return medians,std,coh_points,number_brst_ovlp
 
-def calculate_stats_by_subwath(inps,sub_swath):
+
+def calculate_stats_by_subwath(inps,subswath):
     """
     Calculates and saves ESD statistics for each sub-swath.
 
     Parameters:
         inps (dict): Input directory paths.
-        sub_swath (str): Sub-swath identifier.
+        subswath (str): Sub-swath identifier.
     """
     # Find files in the ESD directory
-    ESD_offset_filename=sorted(glob.glob(os.path.join(inps['ESD_dir'],'2*',sub_swath,'combined.off.vrt')))
+    ESD_offset_filename=sorted(glob.glob(os.path.join(inps['ESD_dir'],'2*',subswath,'combined.off.vrt')))
     n_pairs=len(ESD_offset_filename)
     medians,std,coh_points,n_brst_ovlp=[],[],[],[]
 
@@ -245,16 +257,16 @@ def calculate_stats_by_subwath(inps,sub_swath):
         
     #Check number of burst overlapping areas
     if len(set(n_brst_ovlp)) == 1:
-        logging.info(f'Number of burst overlapping areas found: {n_brst_ovlp[0]} ({sub_swath})\n')
+        logging.info(f'Number of burst overlapping areas found: {n_brst_ovlp[0]} ({subswath})')
     else:
-        logging.info('Error found during calculations.\n')
+        logging.info('Error found during calculations.')
         
     
     # Reshape lists 
     std=np.asarray(std).reshape(n_pairs,n_brst_ovlp[0])
     medians=np.asarray(medians).reshape(n_pairs,n_brst_ovlp[0])
     coh_points=np.asarray(coh_points).reshape(n_pairs,n_brst_ovlp[0])
-    pairs=[os.path.basename(fname.split('/'+sub_swath)[0]) for fname in ESD_offset_filename]
+    pairs=[os.path.basename(fname.split('/'+subswath)[0]) for fname in ESD_offset_filename]
     
     #Coordinates are always read from the first burst overlapping area to the last one
     burst_overlap=['BstOvlp' + str(i) for i in range(1,n_brst_ovlp[0]+1)]
@@ -308,42 +320,43 @@ def calculate_stats_by_subwath(inps,sub_swath):
     
     #--------------------------------------------------#
     #Save dataframes  
-    logging.info('Saving dataframes \n')
-    df_stats_medians.to_csv(os.path.join(inps['inDir'],'ESD_azimuth_offsets/ESD_azimuth_offset_medians_pairs_{}.csv'.format(sub_swath)),
+    logging.info('Saving dataframes')
+    df_stats_medians.to_csv(os.path.join(inps['inDir'],'ESD_azimuth_offsets/ESD_azimuth_offset_medians_pairs_{}.csv'.format(subswath)),
                             float_format='%.15f')
-    df_stats_std.to_csv(os.path.join(inps['inDir'],'ESD_azimuth_offsets/ESD_azimuth_offset_std_pairs_{}.csv'.format(sub_swath)),
+    df_stats_std.to_csv(os.path.join(inps['inDir'],'ESD_azimuth_offsets/ESD_azimuth_offset_std_pairs_{}.csv'.format(subswath)),
                         float_format='%.15f')
-    df_coh_points.to_csv(os.path.join(inps['inDir'],'ESD_azimuth_offsets/ESD_azimuth_offset_coh_points_pairs_{}.csv'.format(sub_swath)),
+    df_coh_points.to_csv(os.path.join(inps['inDir'],'ESD_azimuth_offsets/ESD_azimuth_offset_coh_points_pairs_{}.csv'.format(subswath)),
                          float_format='%.15f')
     
     #--------------------------------------------------#
     #Save summaries from dataframes
     df_stats_medians_describe=df_stats_medians.iloc[:,:-7].describe()
-    df_stats_medians_describe.to_csv(os.path.join(inps['inDir'],'ESD_azimuth_offsets/summary_ESD_azimuth_offset_medians_pairs_{}.csv'.format(sub_swath)),
+    df_stats_medians_describe.to_csv(os.path.join(inps['inDir'],'ESD_azimuth_offsets/summary_ESD_azimuth_offset_medians_pairs_{}.csv'.format(subswath)),
                                      float_format='%.15f')
     df_coh_points_describe=df_coh_points.iloc[:,:-7].describe()
-    df_stats_medians_describe.to_csv(os.path.join(inps['inDir'],'ESD_azimuth_offsets/summary_ESD_azimuth_offset_coh_points_pairs_{}.csv'.format(sub_swath)),
+    df_stats_medians_describe.to_csv(os.path.join(inps['inDir'],'ESD_azimuth_offsets/summary_ESD_azimuth_offset_coh_points_pairs_{}.csv'.format(subswath)),
                                      float_format='%.15f')
     #-----------------------------------------------------#
     #Plot
-    logging.info('Plotting figures \n')
-    plot_distribution_per_burst_overlap(df_stats_medians,df_coh_points,sub_swath,inps)
-    plot_histograms_of_global_variables(df_stats_medians,df_coh_points,sub_swath,inps)
+    logging.info('Plotting figures')
+    plot_distribution_per_burst_overlap(df_stats_medians,df_coh_points,subswath,inps)
+    plot_histograms_of_global_variables(df_stats_medians,df_coh_points,subswath,inps)
     
     #----------------------------------------------------#
     #Report
-    logging.info('Reporting pairs with large MAD of Azimuth Offset \n')
+    logging.info('Reporting pairs with large MAD of Azimuth Offset')
     report_pairs(df_stats_medians,inps)
     
 def run():
     
     inps={'inDir':os.path.dirname(os.path.abspath(args.inDir)),
-          'ESD_dir':os.path.abspath(args.inDir)}
-    logging.info('Checking input parameters\n')
+          'ESD_dir':os.path.abspath(args.inDir),
+          'subswath':args.subswath}
+    logging.info('Checking input parameters')
     inps,skip=check_input_directories(inps)
     if skip==False:
-        logging.info('Retrieving burst overlap statistics at the sub-swath level\n')
-        for sub_swath in inps['sub_swath']:
-            calculate_stats_by_subwath(inps,sub_swath)
+        logging.info('Retrieving burst overlap statistics at the sub-swath level')
+        for subswath in inps['subswath']:
+            calculate_stats_by_subwath(inps,subswath)
         
 run()
