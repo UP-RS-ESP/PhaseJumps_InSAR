@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # ------------------------#
-# Author Sofia Viotto, Bodo Bookhagen
+# Author Sofia Viotto (viotto1@uni-potsdam.de), Bodo Bookhagen
 # V0.1 Oct-2024
-
+# V0.2 Jan-2025
 
 import warnings
-
 warnings.filterwarnings("ignore")
 import numpy as np
 import os, glob
 from mintpy.objects import ifgramStack
 from mintpy.utils import readfile
-
 # import seaborn as sns
 import argparse
 from tqdm import tqdm
@@ -20,10 +18,17 @@ import xarray as xr
 import matplotlib.pyplot as plt
 import numba as nb
 import datetime
-from datetime import date
-import copy
-from mintpy.utils import utils as ut
+#
+import copy,logging
+logging.basicConfig(
+    format='%(asctime)s %(levelname)-8s %(message)s',
+    level=logging.INFO,
+    datefmt='%H:%M:%S')
 
+import time
+start = time.time()
+
+debug = False
 # ---------------------------------------#
 # Plotting styles
 plt.rcParams["font.family"] = "Sans"
@@ -39,15 +44,29 @@ plt.rcParams["ytick.major.width"] = 0.5
 # -----------------------------------#
 synopsis = "Extract azimuth gradient from unwrapped phase in radar coordinates and find phase jumps"
 EXAMPLE = """
-    python calculate_phasejumps_from_mintpystack.py --in_dir /path/mintpy  --plotIndividual --burst-number 9 \n 
-    python calculate_phasejumps_from_mintpystack.py --in_dir /path/mintpy --pair 20160524_20160711 --burst-number 9  --percent-min 85 \n 
+    python calculate_phasejumps_from_mintpystack.py --in_dir /path/mintpy  --plot-ind --n-burst 9 \n 
+    python calculate_phasejumps_from_mintpystack.py --in_dir /path/mintpy --pair 20160524_20160711 --n-burst 9  --min-pct 85 \n 
+    
+    *****************************************************************
+    
+    The number of bursts is listed during ISCE processing. If you did not save the logs, you 
+    can easily identify the number of bursts by looking into the reference directory of your ISCE output. For example:
+    ls -1 reference/IW1/*.vrt | wc -l
+    will give you the number of bursts if you have proceesed sub-swath IW1. This is similar to looking into the secondary directories:
+    ls -1 secondarys/20210412/IW1/burst_0*.vrt | wc -l    
 
+    Note: \n 
+    1)The program requires full extension in the azimuthal direction (i.e. the stacks must not be subset along the azimuthal dimension). \n
+    2)This program is designed to detect phase jumps within a single sub-swath (IW1, IW2 or IW3). 
+It is not compatible yet with stacks created by merging sub-swaths (e.g., IW2-IW3 interferograms).
+    
+    *****************************************************************
     
     References
     1) Wang et al., 2017 "Improving burst aligment in tops interferometry with BESD",
     10.1109/LGRS.2017.2767575
     2) Zhong et al., 2014 "A Quality-Guided and Local Minimum Discontinuity Based 
-    Phase Unwrapping Algorithm for InSAR InSAS Interograms", 10.1109/LGRS.2013.2252880
+    Phase Unwrapping Algorithm for InSAR InSAS Interferograms", 10.1109/LGRS.2013.2252880
     ******************************************************************
     
 """
@@ -61,74 +80,151 @@ parser.add_argument(
     default=os.getcwd(),
 )
 parser.add_argument(
-    "--plotIndividual",
-    dest="plotIndividual",
+    "--plot-ind",
+    dest="plot_ind",
     help="plot individual interferograms next to gradient along the azimuth direction",
     action="store_true",
 )
-parser.add_argument("--pair", "-p", default=None, help="Input pair", dest="pair")
+parser.add_argument("--pair", "-p", default=None, help="Perfom calculations only for pair from the file inputs/ifgramStack.h5", dest="pair")
 parser.add_argument(
-    "--burst-number",
-    dest="bursts",
+    "--n-burst", "-n",
+    dest="n_burst",
     type=int,
-    help="Specify the number of bursts expected within the dataset, which helps to determine the probability of a an area jumping, of being a phase jump",
+    help="Specify the number of bursts expected within the dataset.",
 )
 parser.add_argument(
-    "--percentage-min",
-    default=85,
+    "--min-pct",
+    default=85.0,
     help="Minimun percentage of pixels jumping along a row to be defined as phase jump. It is not recomendable to change the thershold, as the rows may be note reliable",
+    dest="min_pct",
+    type=float
 )
+parser.add_argument("--sub-x",default=None, help=' Define the area of interest along x',
+                    dest="subX",
+                    nargs=2,
+                    type=int
+                    )
 args = parser.parse_args()
 inps = args.__dict__
 
 
 # ------------------------------------#
-def check_inputs(inps):
+def initiate_check(inps):
     # ----
-    # Check folder
+    # Initiate parameters
     # ----
-    # print('Checking input parameters\n')
+      
+    inps["in_dir"] = os.path.abspath(inps["in_dir"])
+    inps["fn_stack"] = os.path.join(inps["in_dir"], "inputs/ifgramStack.h5")
+    inps["out_dir"] = os.path.join(inps["in_dir"], "jumps_eval")
+    inps["out_dir_fig"] = os.path.abspath(os.path.join(inps["out_dir"], "fig"))
+    #print(inps)
+
+    #---
+    #Define output name
+    #---
+    #3D (time,azimuth,range)
+    # subfix_grad='abs_az_grad_mm.nc'
+    # subfix_sev='sev.nc'
+
+    #2D (time, azimuth)    
+    subfix_sev_pct="sev_pct.nc"
+    subfix_nna="nonan_cts.nc"
+    subfix_med="med_az_grad_mm.nc"
+    subfix_tre='treshold_mm.nc'
+    
+    if inps["pair"] == None:
+        # inps['fn_abs_grad_2D'] = os.path.join(inps["out_dir"], subfix_grad )
+        # inps['fn_sev']= os.path.join(inps["out_dir"], subfix_sev)
+        #---
+        inps['fn_nna_cts'] = os.path.join(inps["out_dir"], subfix_nna)
+        inps['fn_sev_pct'] = os.path.join(inps["out_dir"], subfix_sev_pct)
+        inps['fn_med_abs_grad']=os.path.join(inps["out_dir"], subfix_med)
+        inps['fn_tre']=os.path.join(inps["out_dir"],subfix_tre)
+    else:
+        # inps['fn_abs_grad_2D'] = os.path.join(inps["out_dir"],inps['pair'] + "_"+subfix_grad)
+        # inps['fn_sev'] = os.path.join(inps["out_dir"], inps['pair']+ "_"+subfix_sev)
+        #---
+        inps['fn_nna_cts'] = os.path.join(inps["out_dir"], inps['pair']+ '_'+subfix_nna)
+        inps['fn_sev_pct'] = os.path.join(inps["out_dir"],inps['pair'] + "_"+subfix_sev_pct)
+        inps['fn_med_abs_grad']=os.path.join(inps["out_dir"], inps['pair']+ "_"+subfix_med)
+        inps['fn_tre']=os.path.join(inps["out_dir"],inps['pair']+ "_"+subfix_tre)
+    
+    #---
+    #Check parameters
+    #---
+    logging.info('Checking input parameters')
+    if os.path.exists(inps["out_dir"]) is False:
+            os.makedirs(inps["out_dir"])
+            os.makedirs(inps["out_dir_fig"])
+    #-
+    if "plot_ind" not in inps.keys():
+        inps["plot_ind"] = False
+        
+    
+            
     skip = False
-    if os.path.exists(inps["stack_fname"]) is False:
-        print("inputs/ifgramStack.h5 not found\n")
+    if os.path.exists(inps["fn_stack"]) is False:
+        logging.error("inputs/ifgramStack.h5 not found in parent directory.")
         skip = True
-        return skip
-    # -----
-    # Check datastet is not geocoded
-    if os.path.exists(inps["stack_fname"]):
-        atr = readfile.read_attribute(inps["stack_fname"])
+        return skip,inps
+   
+        
+    elif os.path.exists(inps["fn_stack"]):
+        atr = readfile.read_attribute(inps["fn_stack"])
+        inps["orbit"] = atr["ORBIT_DIRECTION"]
+        inps['length']=int(atr['LENGTH'])
+        inps['width']=int(atr['WIDTH'])
+        inps['wavelength']=float(atr["WAVELENGTH"])
+        if inps['subX'] != None:
+            inps['subX'].sort()
+            x_0,x_1 = inps['subX'][0],inps['subX'][1]
+            #Check that x_0 could be used:
+            if (x_0) <0 or (x_1<0):
+                logging.error("No valid subset coordinates")
+                skip=True
+                return skip, inps
+            elif x_1 <= inps['width'] -1:
+                #Define the width
+                inps["width"] = x_1-x_0
+                logging.info('Calculations over AOI of %s pixels'%inps['width'])
+            else:
+                logging.error("No valid subset coordinates")
+                skip=True
+                return skip, inps   
+            
         if "Y_FIRST" in atr.keys():
-            print(
-                "The script is adapted for Not Geocoded datasets, as the result may be inpredectible"
+            logging.error(
+                "The stack must be in radar coordinates"
             )
             skip = True
-
-    return skip
+            return skip,inps
+            
+    if inps['n_burst'] < 2:
+        logging.error("Number burst < 2, then there are not burst overlapping areas")
+        skip=True
+        return skip,inps
+    #-  
+    files = glob.glob(os.path.join(inps["out_dir"], "*.nc"))
+    if len(files) > 0:
+        logging.warning("Output directory not empty. Results will be overwritten") 
+        #skip=True
+        return skip,inps
+    return skip, inps   
 
 
 # -------Plot fuctions
-def PlotData_UnwGradient(inps):
-    # Arrays
-    ds_unw = inps["ds_unw"]
-    ds_abs_grad = inps["ds_abs_grad"]
-    severity_alongX_proportion = inps["severity_alongX_proportion"]
-    percentage_min = inps["percentage_min"]
-    # Figure name
-    name = inps["name"]
-    date12 = inps["date12"]
-    orbit = inps["orbit"]
-    if "fig_size" not in inps.keys():
-        fig_size = (10, 7)
+def PlotData_UnwGradient(arr_unw,arr_abs_grad,sev_pct,min_pct,fn_out,date12,orbit):
+    fig_size = (10, 7)
 
     title = "Pair %s (Mask Coherence)" % date12
 
     # Plot
-    fig, axs = plt.subplots(
-        ncols=3,
+    fig, axs = plt.subplots(ncols=3,
         figsize=fig_size,
         sharex=False,
         sharey=True,
-        gridspec_kw={"width_ratios": [3, 3, 1]},
+        gridspec_kw={'width_ratios': [3, 3, 1]}
     )
     fig.subplots_adjust(top=0.8)
     # Title for the entire figure
@@ -137,11 +233,12 @@ def PlotData_UnwGradient(inps):
     #    Subplot 1: Unwrapped Phase
     axs[0].set_title(r"Unwrap Phase $\varphi$", fontsize=11)
     unwPlot = axs[0].imshow(
-        ds_unw,
+        arr_unw,
         cmap="RdBu",
         interpolation="nearest",
-        vmin=np.nanpercentile(ds_unw, 10),
-        vmax=np.nanpercentile(ds_unw, 90),
+        vmin=np.nanpercentile(arr_unw, 10),
+        vmax=np.nanpercentile(arr_unw, 90),
+        aspect='auto'
     )
     fig.colorbar(
         unwPlot,
@@ -152,16 +249,17 @@ def PlotData_UnwGradient(inps):
         aspect=30,
         orientation="vertical",
     )
-    axs[0].set_ylabel("Y (Radar)")
-    axs[0].set_xlabel("X (Radar)")
-    axs[1].set_xlabel("X (Radar)")
+    axs[0].set_ylabel("Azimuth")
+    axs[0].set_xlabel("Range")
+    axs[1].set_xlabel("Range")
 
     # Subplot 2:
     axs[1].set_title(r"Absolute ($\varphi_{(i+1,j)}-\varphi_{(i,j)}$)", fontsize=11)
-    vmax = np.nanpercentile(ds_abs_grad, 98)
-    vmin = np.nanpercentile(ds_abs_grad, 2)
+    vmax = np.nanpercentile(arr_abs_grad, 98)
+    vmin = np.nanpercentile(arr_abs_grad, 2)
     gradPlot = axs[1].imshow(
-        ds_abs_grad, cmap="viridis", interpolation="none", vmin=vmin, vmax=vmax
+        arr_abs_grad, cmap="viridis", interpolation="none", vmin=vmin, vmax=vmax,
+        aspect='auto'
     )
     fig.colorbar(
         gradPlot,
@@ -176,15 +274,15 @@ def PlotData_UnwGradient(inps):
     # Subplot 3: Jumps Proportion
     axs[2].set_title(r"$\Sigma$ $Jumps_{(i)}$", fontsize=11)
     axs[2].plot(
-        severity_alongX_proportion,
-        np.arange(0, severity_alongX_proportion.shape[0], 1),
+        sev_pct,
+        np.arange(0, sev_pct.shape[0], 1),
         lw=0.5,
         c="black",
     )
     axs[2].set_xlabel("Jumps [%Pixels]")
     axs[2].set_xticks([0, 50, 100])
     axs[2].set_xticklabels([0, 50, 100])
-    axs[2].axvline(x=percentage_min, c="r", lw=0.5, zorder=0)
+    axs[2].axvline(x=min_pct, c="r", lw=0.5, zorder=0)
 
     # Axis inversion based on orbit
     if orbit.lower().startswith("a"):
@@ -200,19 +298,104 @@ def PlotData_UnwGradient(inps):
     # Adjust layout for better spacing
     fig.subplots_adjust(wspace=0.3)
 
-    fig.savefig(name, dpi=300)
+    fig.savefig(fn_out, dpi=150)
 
     plt.clf()
     plt.close()
 
 
-def analyse_PhaseJump_by_date(inps):
+#----------------Aux fuctions
+def group_coord(y, fr, ovlp_reg):
+    
+    y_gps = np.split(y, np.where(np.diff(y) > ovlp_reg/2)[0] + 1)
+    fr_gps = np.split(fr, np.where(np.diff(y) > ovlp_reg/2)[0] + 1)
+    del y,fr
+    
+    y_final = []
+    
+    for gp, fr_gp in zip(y_gps, fr_gps):
+        if gp.shape[0] > 1:
+            try:
+                # #Find the coordinate that have the max frequency
+                y_final.append(copy.deepcopy(gp[fr_gp == np.max(fr_gp)].item()))
+                
+            except:
+                #If the frequency is the same append the first element of the list
+                y_final.extend(copy.deepcopy(gp))
+        else:
+            y_final.append(gp[0])
+    return y_final
+   
+
+def get_phase_jump_cord(da_sev_pct,min_pct,ovlp_reg,n_burst):
+    da_sev_pct2=copy.deepcopy(da_sev_pct)
+    da_sev_pct2 = da_sev_pct2.where(da_sev_pct2 > min_pct)
+
+    # Drop pairs without rows suspected of phase jump
+    da_sev_pct2 = da_sev_pct2.dropna(dim="pair", how="all")
+    
+    # Drop coordinates without da_sev_pct2
+    da_sev_pct2 = da_sev_pct2.dropna(dim="Y", how="all")
+    
+    #Keep the list of filtered dates
+    date12_filt = list(da_sev_pct2.pair.values)
+
+
+    # # -----Rough position guided by regular coordinates
+    # logging.info(
+    #     "Estimating position of Burst Overlap based on sample of size %s unwrap phase"
+    #     % da_sev_pct2.pair.shape[0]
+    # )
+    
+    #Container of rough coordinates along azimuth
+    y_cord_rough = []
+
+    for idx, date12 in enumerate(date12_filt):
+        
+        #Copy pair to avoid modify the original
+        sev_pct_pair = da_sev_pct2.isel(pair=idx).copy()
+        #Keep coordinates
+        y_cord_sev_pair = sev_pct_pair.dropna(dim="Y").Y.values
+        #----------------------------------------------------------#
+        #Calculate shift from coordinates to regular coordinates
+        # dy = np.abs( y_cord_sev_pair- (y_cord_sev_pair // ovlp_reg) * ovlp_reg)
+
+        # # Given filter + multilooking, 
+        # # allow a max shift of certain pixels between the regular position
+        # # and the position where the phase jump is found
+ 
+        # y_cord_sev_pair = y_cord_sev_pair[  dy < ovlp_reg/3 ]
+        #--------------------------------------------------------#
+        # # Remove coordinates at the upper border
+        y_cord_sev_pair = y_cord_sev_pair[y_cord_sev_pair < ((n_burst * ovlp_reg) - ovlp_reg/3)]
+        # Remove coordinates at the lower border
+        y_cord_sev_pair=y_cord_sev_pair[y_cord_sev_pair>ovlp_reg/3]
+        y_cord_rough.extend(copy.deepcopy(list(y_cord_sev_pair)))
+        
+        #Clean
+        del y_cord_sev_pair, sev_pct_pair
+        
+
+    # ----------------
+    # STAGE 3:
+    # --Refinement of positions of phase jumps based on frequency across of pairs
+    # ----------------
+    #logging.info("Refining coordinates based on frequency of phase jumps")
+    y, fr = np.unique(y_cord_rough, return_counts=True)
+
+    # Group closer coordinates
+    y_final=group_coord(y, fr, ovlp_reg)
+    
+    
+    return y_final
+
+def analyze_phase_jump(inps,da_sev_pct,da_NoNan,da_med_abs_grad):
     """
     Analyzes and identifies phase phase jumps in overlapping areas of bursts.
-    phase jumps in the overlapping area are distinguished by the fact that
+    Phase jumps in the overlapping area are distinguished by the fact that
     they are located at approximately regular intervals.
 
-    It reads severity files and identifies phase phase jumps at regular intervals.
+    The programm reads sev files and identifies phase phase jumps at regular intervals.
     Coordinates found are reported.
 
     Parameters:
@@ -222,252 +405,231 @@ def analyse_PhaseJump_by_date(inps):
         - 'date12List' : list
             List of date pairs. Format 'YYYYMMDD_yyyymmdd'
 
-        - 'percentage_min' : float
-            Minimum height percentage to consider a peak of detected pixels as a phase jump, default is 90% of the pixels along the row.
+        - 'min_pct' : float
+            Minimum height percentage to consider a peak of detected pixels as a phase jump, default is 85% of the pixels along the row (range direction).
 
         - 'in_dir' : str
             Directory path where output reports will be saved.
         - 'in_dir_arr_1d' : str
-            Directory path containing 1D severity files.
+            Directory path containing 1D sev files.
         - 'in_dir_arr_2d' : str
-            Directory path containing 2D severity files.
-        - 'outDir_figure' : str
+            Directory path containing 2D sev files.
+        - 'out_dir_fig' : str
             Directory path where output figures will be saved.
-        - 'fname_absolute_azimuth_gradient' : str
+        - 'fn_absolute_azimuth_gradient' : str
             Filename of the 2D azimuth gradient file.
-        - 'bursts' : int
+        - 'n_burst' : int
             Number of bursts in the dataset.
 
     """
 
-    # Input dates
+    # Input
     date12List = inps["date12List"]
-    burst_number = inps["bursts"]
-    percentage_min = inps["percentage_min"]
-    # ---------------#
-    # Inputs files
-    fname_abs_az_grad = inps["fname_absolute_azimuth_gradient"]
-    fname_severity_1D = inps["fname_severity_1D"]
-
-    # Load datasets
-    phase_jumps = xr.open_dataarray(fname_severity_1D)
-    ds_abs_grad = xr.open_dataarray(fname_abs_az_grad)
+    n_burst = inps["n_burst"]
+    min_pct = inps["min_pct"]
+    #
+    length=inps['length']
 
     # Output reports
-    outReport_phase_date12 = os.path.join(inps["in_dir"], "phase_jumps_per_date.txt")
-    outReport_summary = os.path.join(
-        inps["in_dir"], "summary_phase_jumps_y_coordinates.txt"
-    )
-    outReport_exclude_list_interferograms = os.path.join(
-        inps["in_dir"], "exclude_listdate12_interferograms_by_phase_jump.txt"
-    )
-    outReport_exclude_list_dates = os.path.join(
-        inps["in_dir"], "exclude_dates_by_phase_jumps.txt"
-    )
-
+    out_fn_report = os.path.join(inps["in_dir"], "phase_jumps_per_date.txt")
+    out_fn_summary = os.path.join(inps["in_dir"], "summary_phase_jumps_y_cordinates.txt")
+    out_fn_excList_ifgs = os.path.join(inps["in_dir"], "exclude_listdate12_interferograms_by_phase_jump.txt")
+    out_fn_excList_dat = os.path.join(inps["in_dir"], "exclude_dates_by_phase_jumps.txt")
+    out_fn_stats = os.path.join(inps["out_dir"], "stats_absolute_gradient.txt")
+    
     # ----------------
     # STAGE 1:
-    # Determine regular coordinates
+    # Determine regular distance of overlapping areas
     # ---------------
-    Y_regular_spacing = ds_abs_grad.Y.max().item() // burst_number
-    print("\n*Burst Ovlp Areas must be located at ~ %s pixels \n" % Y_regular_spacing)
+    ovlp_reg = length // n_burst
+    
 
     # ------------------
     # STAGE 2:
-    # store coordinates with phase jump at every severity file
-    # ----------------
-
-    phase_jumps = phase_jumps.where(phase_jumps > percentage_min)
-
-    # Drop pairs with no phase_jumps
-    phase_jumps = phase_jumps.dropna(dim="pair", how="all")
-    # Drop coordinates without phase_jumps
-    phase_jumps = phase_jumps.dropna(dim="Y", how="all")
-
-    date12phase_jumps = list(phase_jumps.pair.values)
-
-    phase_jumps_allDates = []
-
-    # -----Rough position
-    print(
-        "\n*Estimating position of Burst Overlap based on sample of size %s unwrap phase"
-        % phase_jumps.pair.shape[0]
-    )
-    for idx, date12 in enumerate(date12phase_jumps):
-
-        # Find phase_jumps with height between a minimun percentage and 100% of the row
-        phase_jumps_pair = phase_jumps.isel(pair=idx).copy()
-        y_coord_phase_jumps_pair = phase_jumps_pair.dropna(dim="Y").Y.values
-
-        # Remove coordinates that do not follow the pattern of being regular coordinates
-        # as expected
-        y_coord_diff2regular_coordinates = np.abs(
-            y_coord_phase_jumps_pair
-            - (y_coord_phase_jumps_pair // Y_regular_spacing) * Y_regular_spacing
-        )
-
-        # Given filter stage and multilooking, plus differences on the overlapping areas
-        # allow a maximum difference of the phase jump of 20 pixels between the regular position
-        # and the position where the phase jump is found
-        y_coord_phase_jumps_pair = y_coord_phase_jumps_pair[
-            y_coord_diff2regular_coordinates < 20
-        ]
-        # Remove coordinates at the border
-        # If those were detected
-        y_coord_phase_jumps_pair = y_coord_phase_jumps_pair[
-            y_coord_phase_jumps_pair < ((burst_number * Y_regular_spacing) - 20)
-        ]
-
-        phase_jumps_allDates.extend(list(y_coord_phase_jumps_pair))
-
-    # ----------------
-    # STAGE 3:
-    # --Refinement of positions
-    # ----------------
-    print("\n*Refining coordinates based on frequency of phase jumps")
-    pj, fr = np.unique(phase_jumps_allDates, return_counts=True)
-    fr, pj = fr[pj > (Y_regular_spacing - 5)], pj[pj > (Y_regular_spacing - 5)]
-    # Group closer coordinates
-    y_groups = np.split(pj, np.where(np.diff(pj) > 20)[0] + 1)
-    fr_groups = np.split(fr, np.where(np.diff(pj) > 20)[0] + 1)
-    y_temp = []
-
-    for gp, fr_gp in zip(y_groups, fr_groups):
-        if gp.shape[0] > 1:
-            try:
-                y_temp.append(gp[fr_gp == np.max(fr_gp)].item())
-            except:
-                y_temp.append(gp[0])
-        else:
-            y_temp.append(gp[0])
-
-    print("\nFrequent coordinates %s \n" % y_temp)
-    phase_jumps = phase_jumps.sel(Y=np.asarray(y_temp))
-    phase_jumps = phase_jumps.dropna(dim="pair", how="all")
+    # Store coordinates with phase jumps in each sev file
+    # ------------------
+    # Pairs with representative rows are used to define the coordinates of phase jumps.
+    # Criteria:
+        # 1) The number of NoNan pixels is at least greater than the 10th percentile 
+        #    of the total pixels available from all rows and all pairs.
+        # This is better than using 10% of the length (number of rows) as a threshold, as it accounts for 
+        # coherence across all pairs.
+        # 2) The percentage of pixels at certain row with an absolute gradient > median exceeds 85%.
+        # 3) If a pair does not meet both (1) and (2), it is discarded.
+        # 4) Only coordinates that satisfy (1) and (2) will be analyzed.
+    #---------------------------#
+    da_NoNan=da_NoNan.where(da_NoNan!=-999)
+    NoNan_10p=np.nanpercentile(da_NoNan.data, 10)
+    if debug==True:
+        print('Reliable rows have ',NoNan_10p)
+  
+    da_sev_pct=da_sev_pct.where(da_NoNan>NoNan_10p)
+    
+    y_iter=[]
+    with tqdm(total=10, desc="Iteration",ncols=100, bar_format="{l_bar}{bar} [ time left: {remaining} ]") as pbar:
+        for n in range(0,10):
+            min_pct_1=min_pct+n*(100-min_pct)/10
+            y_iter.extend(get_phase_jump_cord(da_sev_pct,min_pct_1,ovlp_reg,n_burst))
+            pbar.update(1)
+            
+    y,fr=np.unique(y_iter, return_counts=True)
+    y_final=group_coord(y, fr, ovlp_reg)
+       
+    
+    logging.info("Coordinates of phase jumps %s " % y_final)
+    
+    #--------------#    
+    da_sev_pct = da_sev_pct.sel(Y=np.asarray(y_final))
+    da_sev_pct = da_sev_pct.dropna(dim="pair", how="all")
+    
+    da_med_abs_grad=da_med_abs_grad.sel(Y=np.asarray(y_final))
+    
     # ----------------------------------------#
-    #
-    # ----Redefiny phase jumps by assesing the magnitude of the same
-    ds_abs_grad_phase_jump = ds_abs_grad.sel(Y=np.asarray(y_temp)).copy()
+    if debug==True:
+        #Add the median phase jump per coordinate
+        values = []
+        for pair in date12List:
+            arr = da_med_abs_grad.sel(pair=pair).copy()
+            arr = arr.sel(Y=np.asarray(y_final))
+            arr = arr.data.flatten()
+            arr = np.round(arr, 2)
+            arr = list(arr)
 
-    median_pery_perpair_phase_jump = ds_abs_grad_phase_jump.median(dim=("X"))
-    # Add the median of those coordinates to the global stats
-    values = []
-    for pair in median_pery_perpair_phase_jump.pair.values:
-        arr = median_pery_perpair_phase_jump.sel(pair=pair).copy()
-        arr = arr.sel(Y=np.asarray(y_temp))
-        arr = arr.data.flatten()
-        arr = np.round(arr, 2)
-        arr = list(arr)
+            arr = [str(i) for i in arr]
 
-        arr = [str(i) for i in arr]
-
-        values.append("," + ",".join(arr) + "\n")
-        del arr
-
-    # Open stats and add the new stats:
-    outFile_stats = os.path.join(inps["in_dir"], "stats_absolute_gradient.txt")
-    with open(outFile_stats, "r") as fl:
-        lines = fl.readlines()
-        fl.close()
-    y_temp = ["AbsGrad_Median_Y-" + str(int(i)) + "[mm]" for i in y_temp]
-    lines[10] = lines[10].replace("\n", "," + ",".join(y_temp) + "\n")
-    # Add the statis
-    subset_lines = copy.deepcopy(lines[11:])
-    subset_lines = [i.replace("\n", j) for i, j in zip(subset_lines, values)]
-    lines[11:] = subset_lines
-    with open(outFile_stats, "w") as fl:
-        for line in lines:
-            fl.write(line)
-        fl.close()
+            values.append("," + ",".join(arr) + "\n")
+            del arr,pair
+            
+    
+        # Open stats and add the new stats:
+    
+        logging.info("Median Absolute Gradient per Coordinate saved at %s " % out_fn_stats)
+    
+        with open(out_fn_stats, "r") as fl:
+            lines = fl.readlines()
+            fl.close()
+        
+        y_txt = ["AbsGrad_Median_Y-" + str(int(i)) + "[mm]" for i in y_final]
+        lines[10] = lines[10].replace("\n", "," + ",".join(y_txt) + "\n")
+    
+        # Add the statis
+        subset_lines = copy.deepcopy(lines[11:])
+        subset_lines = [i.replace("\n", j) for i, j in zip(subset_lines, values)]
+        lines[11:] = subset_lines
+        with open(out_fn_stats, "w") as fl:
+            for line in lines:
+                fl.write(line)
+            fl.close()
+        del subset_lines,y_txt,lines,values
 
     # --------------------#
     # STAGE 4
-    # -------------------#´
+    # -------------------#
+    #Find the pairs with median ds abs grad larger than the 95th percentile
+    #logging.info("Looking at the distrbution of the median absolute gradient per row %s " % out_fn_stats)
+    med_threshold = 1.0#np.nanpercentile(da_med_abs_grad.data, 99)
+    
+    if debug==True:
+        plt.figure()
+        x=da_med_abs_grad.data.flatten()
+        x=x[x!=np.nan]
+        plt.hist(x)
+        plt.axvline(med_threshold,c='red')
+        plt.axvline(x=1.0,c='red')
+        plt.savefig(os.path.join(inps['out_dir'],'histogram_med_absolute_gradient.png'),dpi=100)
 
-    median_threshold = np.nanpercentile(median_pery_perpair_phase_jump.data, 95)
-
-    median_pery_perpair = median_pery_perpair_phase_jump.where(
-        median_pery_perpair_phase_jump >= median_threshold
+    da_med_abs_grad_filt = da_med_abs_grad.where(
+        da_med_abs_grad >= med_threshold
     )
-    median_pery_perpair = median_pery_perpair.dropna(dim="pair", how="all")
-    date12phase_jumps_final = list(median_pery_perpair.pair.values)
+    da_med_abs_grad_filt = da_med_abs_grad_filt.dropna(dim="pair", how="all")
+    
+    #Keep the dates
+    date12_filt_final = list(da_med_abs_grad_filt.pair.values)
 
-    print(
-        "\n>> Redefining significant unwrap phase jumps.\n*Total of pairs found with significant phase jumps: %s\n"
-        % len(date12phase_jumps_final)
+    logging.info("Phase jump is significant if the median jump of the row is >%s mm\n"
+    % np.round(med_threshold, 2)+
+        " Total of pairs found with significant phase jumps: %s"
+        % len(date12_filt_final)
     )
-    print(
-        "\n Phase jump is significant if the median jump of the line is >%s mm\n"
-        % np.round(median_threshold, 2)
-    )
-
-    # #--------------Beging Report
-    phase_jumps_allDates = []
-    UnwrapPhase2Report = []
-    y_coord_phase_jumps_pair = []
-
-    for idx, date12 in enumerate(date12phase_jumps_final):
-
-        # Find phase_jumps with height between a minimun percentage and 100% of the row
-        ds_abs_grad_pair = median_pery_perpair.sel(pair=date12).copy()
-        y_coord_phase_jumps_pair = list(ds_abs_grad_pair.dropna(dim="Y").Y.values)
-
-        if len(y_coord_phase_jumps_pair) > 0:
-            # Calculate the median phase jump
-            median_abs_grad_pair = np.nanmedian(ds_abs_grad_pair.data)
-
-            # Save outputs and reports
-            phase_jumps_allDates.extend(y_coord_phase_jumps_pair)
-            y_coord_phase_jumps_pair = [str(i) for i in y_coord_phase_jumps_pair]
-            spacing = "\t" * ((burst_number // 2 - len(y_coord_phase_jumps_pair) // 2))
-            UnwrapPhase2Report.extend(
-                [
-                    date12
-                    + "\t"
-                    + str(len(y_coord_phase_jumps_pair))
-                    + "\t\t"
-                    + ",".join(y_coord_phase_jumps_pair)
-                    + spacing
-                    + str(np.round(median_abs_grad_pair, 2))
-                ]
-            )
-        else:
-            # Remove date12 if there is not date to report
-            date12phase_jumps_final = [
-                i for i in date12phase_jumps_final if i != date12
-            ]
-            continue
-        del ds_abs_grad_pair
 
     # ----------------------------------------------#
     # Report phase jumps
     # ----------------------------------------------#
-    if len(UnwrapPhase2Report) > 0:
+    #--------------Beging Report
+    y_summary = []
+    
+    report_txt = []
+    y_pj_pair = []
+    logging.info(
+        "Reporting phase jumps %s"
+        % out_fn_report
+    )
+    for idx, date12 in enumerate(date12_filt_final):
 
-        header = "# Pairs found with systematic phase jumps \n"
-        header += "# N_Disc: Number of phase jumps \n"
-        header += "# Y_coord: Coordinates along the azimuth direction\n\n"
+        da_med_abs_grad_pair = da_med_abs_grad_filt.sel(pair=date12).copy()
+        y_pj_pair = list(da_med_abs_grad_pair.dropna(dim="Y").Y.values)
+
+        if len(y_pj_pair) > 0:
+            # Store
+            y_summary.extend(copy.deepcopy(y_pj_pair))
+            
+            #Transform to string for reporting
+            y_pj_pair = [str(i) for i in y_pj_pair]
+            spacing = "\t" * ((n_burst // 2 - len(y_pj_pair) // 2))
+            
+            # Calculate the average phase jump
+            avg_pj = np.nanmean(da_med_abs_grad_pair.data)
+            
+            report_txt.extend(
+                [
+                    date12
+                    + "\t"
+                    + str(len(y_pj_pair))
+                    + "\t\t"
+                    + ",".join(y_pj_pair)
+                    + spacing
+                    + str(np.round(avg_pj, 2))
+                ]
+            )
+        else:
+            # Remove date12 if there is not date to report
+            date12_filt_final = [
+                i for i in date12_filt_final if i != date12
+            ]
+            continue
+        del da_med_abs_grad_pair
+
+    
+    if len(report_txt) > 0:
+
+        header = ("# Pairs found with systematic phase jumps \n"
+        "# N_Disc: Number of phase jumps per pair \n"
+        "# Az_cord: Azimuth coordinate with phase jump\n"
+        "# Avg_Ph_Jump_mm: Average phase jump \n" )
 
         # -Report each pair, number of phase jumps and coordinates
-        with open(outReport_phase_date12, "w") as filehandle:
-            filehandle.write(header)
-            filehandle.write(
-                "#\t DATE12 \tN_Disc\t\tY_Coord\t\t\tMedian_Phase_Jump[mm]\n"
+        with open(out_fn_report, "w") as fl:
+            fl.write(header)
+            fl.write(
+                "#\t DATE12 \tN_Disc\t\tAz_cord\t\t\tAvg_Ph_Jump_mm\n"
             )
-            for item in UnwrapPhase2Report:
-                filehandle.write("%s\n" % item)
+            for item in report_txt:
+                fl.write("%s\n" % item)
+            fl.close()
 
     # Provide a summary of the coordinates found
-    phase_jumps_, counts_ = np.unique(phase_jumps_allDates, return_counts=True)
-    with open(outReport_summary, "w") as filehandle:
-        filehandle.write("#Y_coord\tCounts\n")
-        for pos, cnt in zip(phase_jumps_, counts_):
-            filehandle.write("%s\t%d\n" % (pos, cnt))
+    y_, cts_ = np.unique(y_summary, return_counts=True)
+    with open(out_fn_summary, "w") as fl:
+        fl.write("#Az_cord\tCounts\n")
+        for y_i, cnt_i in zip(y_, cts_):
+            fl.write("%s\t%d\n" % (y_i, cnt_i))
+            
+    del y_, cts_
     # #------------------
     # #Create a list of interferograms
 
-    with open(outReport_exclude_list_interferograms, "w") as fl:
-        fl.write(",".join(date12phase_jumps_final))
+    with open(out_fn_excList_ifgs, "w") as fl:
+        fl.write(",".join(date12_filt_final))
 
     # #--------------------------
     # Create a list to exclude dates from further processing based on how many interferograms
@@ -476,8 +638,8 @@ def analyse_PhaseJump_by_date(inps):
     dates.extend([pair.split("_")[1] for pair in date12List])
     dates, fr_interferograms = np.unique(dates, return_counts=True)
 
-    dateswithphase_jumps = [i.split("_")[0] for i in date12phase_jumps_final]
-    dateswithphase_jumps.extend(i.split("_")[1] for i in date12phase_jumps_final)
+    dateswithphase_jumps = [i.split("_")[0] for i in date12_filt_final]
+    dateswithphase_jumps.extend(i.split("_")[1] for i in date12_filt_final)
     dateswithphase_jumps, fr_ifgs_phase_jumps = np.unique(
         dateswithphase_jumps, return_counts=True
     )
@@ -491,9 +653,9 @@ def analyse_PhaseJump_by_date(inps):
         ]
     ).flatten()
 
-    dd = list(dateswithphase_jumps[proportion > 49])
-    # print(dd)
-    with open(outReport_exclude_list_dates, "w") as fl:
+    dd = list(dateswithphase_jumps[proportion > 50])
+    # logging.info(dd)
+    with open(out_fn_excList_dat, "w") as fl:
         fl.write(",".join(dd))
 
 
@@ -508,636 +670,383 @@ def save_global_stats2txt(inps):
         for pair in inps["date12List"]
     ]
     Bt = [(sec - ref).days for ref, sec in zip(refList, secList)]
-    coherence_stats = np.asarray(inps["coherence_stats"])  # [:,:-1]
-    abs_grad_stats = np.asarray(inps["abs_grad_stats"])
-    size = 1 + coherence_stats.shape[1] + abs_grad_stats.shape[1]
+    stats_coh = np.asarray(inps["stats_coh"])  # [:,:-1]
+    stats_abs_grad = np.asarray(inps["stats_abs_grad"])
+    size = 1 + stats_coh.shape[1] + stats_abs_grad.shape[1]
 
     array = np.empty((len(refList), size), dtype=float)
     array[:, 0] = Bt
-    array[:, 1 : coherence_stats.shape[1] + 1] = coherence_stats
-    array[:, coherence_stats.shape[1] + 1 :] = abs_grad_stats
+    array[:, 1 : stats_coh.shape[1] + 1] = stats_coh
+    array[:, stats_coh.shape[1] + 1 :] = stats_abs_grad
 
     # Save Txt file with stats from Azimuth Gradient
-    outFile = os.path.join(inps["in_dir"], "stats_absolute_gradient.txt")
+    outFile = os.path.join(inps["out_dir"], "stats_absolute_gradient.txt")
 
-    header = "# No Data Values (Zero Values) were skipped from all calculations \n"
-    header += "# Coherence statistics were retrieved from all No Nans pixels .\n"
-    header += "# Pixels with coherence <0.75 were masked out in the calculation of the absolute Azimuth Gradient statistics and corresponding severity.\n"
-    header += "# The number of masked-out pixels varies from pair to pair.\n"
-    header += "##Column Names/Prefix: \n"
-    header += "#Btemp: Temporal Baseline \n"
-    header += "#Coh: Coherence\n"
-    header += "#Abs_Grad: Absolute Gradient Along the Azimuth Direction \n"
-    header += "#Pxs: Number of No-Nan Pixels \n\n"
+    header = (
+    "# No Data Values (Zero Values) were excluded from all calculations.\n"
+    "# Coherence statistics were derived from all non-NaN pixels.\n"
+    "# Pixels with coherence < 0.75 were masked out during the calculation of absolute azimuth gradient and corresponding severity.\n"
+    "# The number of masked-out pixels varies between pairs.\n"
+    "## Column Names/Prefixes:\n"
+    "# Btemp: Temporal Baseline\n"
+    "# Coh: Coherence\n"
+    "# AbsGrad: Absolute gradient along the azimuth direction and across range \n"
+    "#Med: Median, Std: Standard deviation\n\n"
+ )
 
-    stats_name = ["AbsGrad_Median[mm]", "AbsGrad_Mean[mm]", "AbsGrad_Std[mm]"]
+    stats_name = ["AbsGrad_Median_mm", "AbsGrad_Mean_mm", "AbsGrad_Std_mm"]
     # Prepare name of columns
     colCoh = copy.deepcopy(stats_name)
-    colCoh = [i.replace("AbsGrad", "Coh").replace("[mm]", "") for i in colCoh]
+    colCoh = [i.replace("AbsGrad", "Coh").replace("_mm", "") for i in colCoh]
     colCoh = ",".join(colCoh)
     colabs_grad = stats_name
     colabs_grad = ",".join(colabs_grad)
     columns = "DATE12,Btemp[days]," + colCoh + "," + colabs_grad + "\n"
 
-    with open(outFile, "w") as filehandle:
-        filehandle.write(header)
-        filehandle.write(columns)
+    with open(outFile, "w") as fl:
+        fl.write(header)
+        fl.write(columns)
         for line, pair in zip(array, inps["date12List"]):
             line = list(np.round(line, 2).astype(str))
             line = pair + "," + ",".join(line) + "\n"
-            filehandle.write(line)
+            fl.write(line)
 
 
-@nb.njit(parallel=True)
-def diff_along_azimuth(ds_unw):
-    # ds_grad_az in shape (time,rows-Y,cols-X)
-    ds_grad_az = np.empty(ds_unw.shape, dtype=np.float32)
-    for n in nb.prange(ds_unw.shape[0]):
-        array = np.concatenate(
-            (
-                np.zeros((1, ds_unw.shape[2]), dtype=np.float32),
-                ds_unw[n, :, :].astype(np.float32),
-            )
-        ).astype(np.float32)
+@nb.njit()
+def calculate_stats_arrays(ds_unw,ds_coh):
 
-        ds_grad_az[n, :, :] = np.diff(array.T).T.astype(np.float32)
-    return ds_grad_az
+    stats_abs_grad = np.empty((3), dtype=np.float32)
+    stats_coh = np.empty((3), dtype=np.float32)
 
-
-@nb.njit(parallel=True)
-def stats_ds_unw(ds_unw):
-
-    stats = np.empty((ds_unw.shape[0], 3), dtype=np.float32)
-
-    for n in nb.prange(ds_unw.shape[0]):
-        array = ds_unw[n, :, :]
-        stats[n, 0] = np.round(np.nanmedian(array), 2)
-        stats[n, 1] = np.round(np.nanmean(array), 2)
-        stats[n, 2] = np.round(np.nanstd(array), 2)
-        # stats[n,3]=np.count_nonzero(~np.isnan(array))
-    return stats
+    stats_abs_grad[0] = np.round(np.nanmedian(ds_unw), 2)
+    stats_abs_grad[1] = np.round(np.nanmean(ds_unw), 2)
+    stats_abs_grad[2] = np.round(np.nanstd(ds_unw), 2)
+    
+    stats_coh[0] = np.round(np.nanmedian(ds_coh), 2)
+    stats_coh[1] = np.round(np.nanmean(ds_coh), 2)
+    stats_coh[2] = np.round(np.nanstd(ds_coh), 2)    
+    
+        
+    return stats_abs_grad, stats_coh
 
 
 def readData2VerticalGradient(inps):
-    # ----------------Define parameters
-    stack_fname = inps["stack_fname"]
-    pbar = inps["pbar"]
-    outDir_arr_2d = inps["outDir_arr_2d"]
-    outDir_arr_1d = inps["outDir_arr_1d"]
-
-    # ----------------------------------
-    # Define outputs name
-    if inps["pair"] == None:
-
-        # Define output names
-        fname_counts_nonan = os.path.join(outDir_arr_1d, "Counts_NoNan.nc")
-        fname_severity_1D = os.path.join(
-            outDir_arr_1d, "severity_absolute_azimuth_gradient_along_range.nc"
-        )
-        fname_severity_2D = os.path.join(
-            outDir_arr_2d, "severity_absolute_gradient_azimuth.nc"
-        )
-        fname_abs_grad_2D = os.path.join(
-            outDir_arr_2d, "absolute_azimuth_gradient_2D_mm.nc"
-        )
-
-    else:
-        # Define output names
-        date12 = inps["pair"]
-        fname_counts_nonan = os.path.join(outDir_arr_1d, date12 + "_Count_NoNan.nc")
-        fname_severity_1D = os.path.join(
-            outDir_arr_1d, date12 + "_severity_absolute_azimuth_gradient_along_range.nc"
-        )
-        fname_severity_2D = os.path.join(
-            outDir_arr_2d, date12 + "_severity_absolute_gradient_azimuth.nc"
-        )
-        fname_abs_grad_2D = os.path.join(
-            outDir_arr_2d, date12 + "_absolute_azimuth_gradient_2D_mm.nc"
-        )
+    # ----------------
+    #Input
+    #----------------
+    fn_stack = inps["fn_stack"]
+    #Y=length=azimuth coordinate
+    #X=width=range coordinates
+    length=inps['length']
+    width=inps['width']
+    date12List=inps['date12List']
+    wavelength=inps['wavelength']
+    phase2range = wavelength / (4.0 * np.pi)
+    min_pct=inps['min_pct']
+    # ----------------
+    #Output
+    #-----------------
+    #3D (time, azimuth, range)
+    # fn_abs_grad=inps['fn_abs_grad_2D']
+    # fn_sev = inps['fn_sev']
+    
+    #2D (time, azimuth)
+    fn_nna_cts = inps['fn_nna_cts']
+    fn_sev_pct = inps['fn_sev_pct']
+    fn_med_abs_grad=inps['fn_med_abs_grad']
+    fn_treshold=inps['fn_tre']
+        
 
     # -------------Begining Main Operations-------------#
 
-    # -------------
-    # Calculate severity of the phase jump using a  threshold
-    # threshold=coefficient*np.pi
-    # -------------
-    # A phase jump will be defenitvely happend if the threshold=2 * pi for the unwrap Phase,
-    # As used in Eq 2, page 216
-    # Minor phase jumps also occur for smaller values of pi
-    # .---------------------
-    # For Sentinel 1: lambda 0.05546576 m = 5.54 cm
-    # A coefficient of is 0.50 equals to  a phase jump of (pi/2), which is 0.635 cm
-    # A coefficient of 1 equals to a phase jump of (1 *pi), which is is 1.385 cm
-
-    # ---------------
-    # Read unwrap Phase
-    # ---------------
-    atr = readfile.read_attribute(stack_fname)
-    inps["atr"] = atr
-
-    # Load the whole dataset if pair not specified
-    if inps["pair"] == None:
-        ds_unw = readfile.read(stack_fname, datasetName="unwrapPhase")[0]
-    else:
-        ds_unw = readfile.read(
-            stack_fname, datasetName="unwrapPhase-%s" % inps["pair"]
-        )[0]
-
-    # Zero is no data in the wrapped phase, and it must be as well
-    # in the unw phase
-    ds_unw[ds_unw == 0] = np.nan
-    # print(ds_unw.shape)
     # --------------------
     # Calculate Azimuth Gradient
     # -----------------
-    # Calculate the diff along the azimuth direction to later compute
+    # Calculate the diff along the azimuth direction to later detect phase jumps
     # v(m,n)  from the equation of Zhong et al., 2014:
-    # v m,n = Int((φ m,n − φ m−1,n )/2π) (Eq 2, page 216)
+    # v(m,n) = Int((φ m,n − φ m−1,n )/2π) (Eq 2, page 216)
     # ds_grad_az= (φ m,n − φ m−1,n )
-    # axis 0 is equal to Y direction=azimuth direction
+    # axis 0 is equal to Y direction=azimuth direction for 2D arrays
     # ds_grad_az=np.diff(ds_unw, axis=0,prepend=0)
 
-    # Absolute Azimuth Gradient  and related outputs and parameters
-    # will be called with subfix  abs_grad
-    if inps["pair"] == None:
 
-        # Foor loop with prepend
-        ds_abs_grad = np.abs(diff_along_azimuth(ds_unw))
+    #---------------------------------#
+    #Bodo: load the whole dataset is not a good idea for heavy files 
+    # The memory may be not enough. It's better and faster
+    # to apply the fuction one pair at the time. 
+    #-------------------------------#
+    
+    
+    #Create containers for arrays
+    arr_med_sev_acrX=np.zeros((len(date12List),length),dtype=float)
+    arr_sev_y=np.zeros((len(date12List),length),dtype=float)
+    arr_threshold=np.zeros(len(date12List),dtype=float)
+    arr_NoNans=np.zeros((len(date12List),length),dtype=int)
+    arr_NoNans-=999
+    #Create containers for stats
+    stats_abs_grad=np.zeros((len(date12List),3),dtype=float)
+    stats_coh=np.zeros((len(date12List),3),dtype=float)
+    logging.info('Calculating Absolute Gradient in the Azimuth Direction')
+    with tqdm(total=len(date12List), desc="Pairs processed",ncols=100, bar_format="{l_bar}{bar} [ time left: {remaining} ]") as pbar:
+        #Loop to generate sev    
+        for idx, pair in enumerate(date12List):
+            
+            #---------------------------------#
+            # Note: Loading the entire dataset is not a good idea for large files.
+            # The memory might not be sufficient. It is better and faster
+            # to apply the function one pair at a time.
+            #---------------------------------#
+            #Read data
+            if inps['subX']!=None:
+                #(x0, y0, x1, y1)
+                x0,x1=np.min(inps['subX']),np.max(inps['subX'])
+                bbox=[x0,0,x1,length]
+            
+            else:
+                bbox=None
+            
+            arr_unw = readfile.read(fn_stack, 
+                               datasetName='unwrapPhase-'+pair,
+                               box=bbox)[0]
+            arr_coh= readfile.read(fn_stack, 
+                              datasetName='coherence-'+pair,
+                              box=bbox)[0]
+            #Apply mask
+            arr_unw[arr_coh<0.75]=np.nan
+        
+            #Remove no data
+            arr_coh[arr_coh==0]=np.nan
+            arr_unw[arr_unw==0]=np.nan
+        
+            #Calculate absolute gradient
+            #Do not prepend a zero, as the first line is already zero
+            arr_abs_grad=np.zeros(arr_unw.shape, dtype=float)
+            arr_abs_grad[1:,:]=np.abs(np.diff(arr_unw,axis=0))
+            arr_abs_grad[:2,:]=np.nan
+            #  Set the last lines to zero, to avoid border effects
+            arr_abs_grad[-2:,:]=np.nan
+            
+        
+            #Convert to displacement and express in milimeters
+            arr_abs_grad *= phase2range
+            arr_abs_grad *= 1000
+            #Set outliers to nan as well, BEFORE deriving statistics
+            p99=np.nanpercentile(arr_abs_grad,99)
+            if debug==True:
+                logging.info('Removing Outliers  beyond value %s mm \n' %p99)
+                logging.info('Removing Outliers  with max value %s mm \n' %np.nanmax(arr_abs_grad))
+            #-
+            arr_abs_grad[arr_abs_grad>p99]=np.nan
+        
+        
+            #Obtain stats 
+            stats_abs_grad[idx,:],stats_coh[idx,:]=calculate_stats_arrays(arr_abs_grad,arr_coh)
+            
+        
+        
+            # -----------------------------------------
+            # Calculate the sev (magnitude) of the phase jump
+            # -----------------------------------------
+            # Calculate the sev , as the division
+            # between the Absolute Azimuth Gradient and  the threshold,
+            # then round the values to zero decimals.
+            #
+            #  sev(time_i)=round(absolute_gradient(time_i)/threshold(time_i))
+            #with threshold= median(absolute_gradient(time_i))
+            #
+            # By rounding, 0 represent gradients below and far away from ratio gradient to threshold
+            # 1=phase jumps close or above 1 from the threshold
+            #-------------------------------------------------
+            #First threshold it is if the difference is larger than the median gradient of the track
+            threshold=stats_abs_grad[idx,0]
+        
+            #Dims (row-1,col)=(azimuth,range)=(y,x)
+            sev=np.zeros(arr_abs_grad.shape,dtype=float)
+            sev=np.where(arr_abs_grad>=threshold,1,sev)
+            mask=np.isnan(arr_abs_grad)
+            sev[mask]=np.nan
+            #sev = np.round(np.divide(arr_abs_grad, threshold), 0)
+            if debug==True:
+                print(np.nanmin(sev),np.nanmean(sev),np.nanmax(sev))
+                plt.figure()
+                plt.hist(sev[sev!=np.nan],bins=5)
+                out=os.path.join(inps['out_dir_fig'],'hist_sev_%s.png'%pair)
+                plt.savefig(out,dpi=100)
+                plt.close()
+            sev[sev > 1] = 1
+        
+            #Dims (row-1)
+            sev_acrX = np.nansum(sev, axis=1)
+        
+            #Count NoNans pixels to 1) compute percentage along the row, and 
+            # 2) determine if the row is reliable,
+            #given the ammount of pixels no nans along that row
+            NoNan_acrX_cts = np.count_nonzero(~np.isnan(sev), axis=1)
+            NoNan_acrX_cts = NoNan_acrX_cts.astype(int)
+            
+            np.seterr(invalid="ignore")
+            #Express as percentage from pixels
+            sev_pct = np.divide(sev_acrX, NoNan_acrX_cts) * 100
+            sev_pct = np.round(sev_pct, 1)
+                  
+            med_acrX=np.nanmedian(arr_abs_grad,axis=1)
+        
+            #---------Copy to result
+        
+            arr_sev_y[idx,:]=copy.deepcopy(sev_pct)
+            arr_med_sev_acrX[idx,:]=copy.deepcopy(med_acrX)
+            arr_threshold[idx]=copy.deepcopy(threshold)
+            arr_NoNans[idx,:]=copy.deepcopy(NoNan_acrX_cts)
+        
+            if (inps['plot_ind']==True) or (debug==True):
+                fn_out=os.path.join(inps['out_dir_fig'],'abs_grad_az_{}.png'.format(pair))
+            
+                PlotData_UnwGradient(arr_unw=arr_unw, 
+                                  arr_abs_grad=arr_abs_grad, 
+                                  sev_pct=sev_pct, 
+                                  min_pct=min_pct, 
+                                  fn_out=fn_out, 
+                                  date12=pair, 
+                                  orbit=inps['orbit'])
+            
+            
+            del sev_pct,med_acrX,arr_unw,arr_abs_grad,arr_coh,sev_acrX
+            pbar.update(1)
+            
+    inps['stats_coh']=stats_coh
+    inps['stats_abs_grad']=stats_abs_grad
+    save_global_stats2txt(inps)      
+  
 
-    else:
-        ds_abs_grad = np.abs(np.diff(ds_unw, axis=0, prepend=0))
 
-    pbar.update(1)
-    # Express in milimiters
-    phase2range = float(atr["WAVELENGTH"]) / (4.0 * np.pi)
-    ds_abs_grad *= phase2range
-    ds_abs_grad *= 1000
-    # Clean memory
-    del ds_unw
-
-    # ---------------------
-    # Read coherence & Use it as mask
-    # --------------------
-    if inps["pair"] == None:
-        # Foor loop with prepend
-        ds_coh = readfile.read(stack_fname, datasetName="coherence")[0]
-    else:
-        ds_coh = readfile.read(stack_fname, datasetName="coherence-%s" % inps["pair"])[
-            0
-        ]
-    # Zero is No Data
-    ds_abs_grad[ds_coh < 0.75] = np.nan
-
-    # -----------------
-    # Stats from datasets
-    # ----------------
-
-    # Other parameters for stats
-    if inps["pair"] == None:
-        stats_ds_abs_grad = stats_ds_unw(ds_abs_grad)
-        ds_coh[ds_coh == 0] = np.nan
-        stats_coh = stats_ds_unw(ds_coh)
-
-        # Clean memory
-        del ds_coh
-        inps["coherence_stats"] = stats_coh
-        inps["abs_grad_stats"] = stats_ds_abs_grad
-        save_global_stats2txt(inps)
-        del stats_coh, stats_ds_abs_grad
-    else:
-        print("\n >> Skipping global statistics for a unique dataset.. \n")
-    pbar.update(1)
-
-    # -----------------------------------------
-    # Calculate the severity
-    # -----------------------------------------
-    # Calculate the severity in 2D, as the division
-    # between the Azimuth Gradient and and the threshold,
-    # then round the values to zero decimals.
-    # By rounding, 0 = phase jumps below and far away from ratio gradient to threshold
-    # 1=phase jumps close or above 1 from the
-    #
-    # Obtain the median for every time step
-    if inps["pair"] == None:
-        coefficient = np.nanpercentile(ds_abs_grad, 50, axis=(1, 2))
-        # Transpose to (dim_0,dim_1,time) and transpose back
-        severity_2d = np.round(np.divide(ds_abs_grad.T, coefficient), 0).T
-        del coefficient
-        # Set values ds_abs_grad /(coefficient*np.pi) > 1 , also to one
-        severity_2d[severity_2d > 1] = 1
-        axis_number = 2
-        # Prepare to save it
-        ds_abs_grad = xr.DataArray(
-            ds_abs_grad,
-            dims=("pair", "Y", "X"),
-            coords={
-                "pair": inps["date12List"],
-                "Y": np.arange(0, ds_abs_grad.shape[1], 1),
-                "X": np.arange(0, ds_abs_grad.shape[2], 1),
-            },
-        )
-    else:
-        coefficient = np.nanpercentile(ds_abs_grad, 50)
-        severity_2d = np.round(np.divide(ds_abs_grad, coefficient), 0)
-        del coefficient
-        # Set values ds_abs_grad /(coefficient*np.pi) > 1 , also to one
-        severity_2d[severity_2d > 1] = 1
-        axis_number = 1
-        # Prepare to save it
-        ds_abs_grad = xr.DataArray(
-            ds_abs_grad,
-            dims=("Y", "X"),
-            coords={
-                "Y": np.arange(0, ds_abs_grad.shape[1], 1),
-                "X": np.arange(0, ds_abs_grad.shape[2], 1),
-            },
-        )
-
-    print("\n >> Saving Gradient ... \n")
-    ds_abs_grad = ds_abs_grad.rename("absolute_azimuth_gradient_mm")
-    ds_abs_grad.to_netcdf(
-        fname_abs_grad_2D,
-        encoding={
-            "absolute_azimuth_gradient_mm": {
-                "dtype": "float32",
-                "zlib": True,
-                "complevel": 7,
-            }
-        },
-    )
-    del ds_abs_grad
-    pbar.update(1)
-
-    # Count along the X axis how many times 1 is found
-    severity_alongX = np.nansum(severity_2d, axis=axis_number)
-
-    # Exprese severity as the proportion of counts to
-    # NoNan pixels along X direction, which is the range direction
-    NoNan_counts = np.count_nonzero(~np.isnan(severity_2d), axis=axis_number)
-    NoNan_counts = NoNan_counts.astype(int)
-    # --------------------#
-    # Remove coordinates that are smaller than a certain percentage of NoNanPixels
-    NoNan_counts_p10 = np.nanpercentile(NoNan_counts, 10)
-
-    severity_alongX[NoNan_counts < NoNan_counts_p10] = np.nan
-    np.seterr(invalid="ignore")
-    severity_alongX_proportion = np.divide(severity_alongX, NoNan_counts) * 100
-    # Set first two rows and the two last rows to nan to avoid phase_jumps at the border of the dataset
-    severity_alongX_proportion = np.round(severity_alongX_proportion, 1)
-    del severity_alongX, NoNan_counts_p10
 
     # #----------------Begining Save Outputs ------------------------------#
     # #--------------------------#
     # #Save
     # #--------------------------#
-    # severity_2d=severity_2d.astype(int)
-    if inps["pair"] == None:
+    logging.info("Saving relevant files")
+    #---------
+    #All files saved are of dims=(pairs,Y)
+    #
+    #Az gradient
+    da_med_abs_grad = xr.DataArray(
+                arr_med_sev_acrX,
+                dims=("pair", "Y"),
+                coords={
+                    "pair": date12List,
+                    "Y": np.arange(0, length, 1),
+                    
+                },
+            )
+    da_med_abs_grad=da_med_abs_grad.where(da_med_abs_grad!=0) 
+    da_med_abs_grad=da_med_abs_grad.rename("abs_grad_az_mm")
+    
+    da_med_abs_grad.to_netcdf(fn_med_abs_grad,
+                              encoding={
+                                  "abs_grad_az_mm": {
+                                      "dtype": "float32",
+                                      "zlib": True,
+                                      "complevel": 7,
+                                  }
+                              }
+                         )
+    
+     
+    
+    #Severity
+    da_sev_pct= xr.DataArray(
+                arr_sev_y,
+                dims=("pair", "Y"),
+                coords={
+                    "pair": date12List,
+                    "Y": np.arange(0, length, 1),
+                    
+                },
+            )
+    da_sev_pct=da_sev_pct.rename("sev_pct")
+    da_sev_pct=da_sev_pct.where(da_sev_pct!=0)
+    da_sev_pct.to_netcdf(fn_sev_pct,
+                     
+                     encoding={
+                    "sev_pct":{"dtype": "int16",
+                    "zlib": True,
+                    "complevel": 7,
+                    "_FillValue": -999,
+                                                            }
+                                                })
+    
+    
+    #Threshold per pair to define severity
+    da_treshold=xr.DataArray(
+        arr_threshold,dims=('pair'),
+        coords={'pair':date12List}
+        )
 
-        print("\n >> Saving Other Relevant files... \n")
+    da_treshold=da_treshold.rename("treshold_med_mm")
+ 
+   
+    da_treshold.to_netcdf(fn_treshold,
+                          encoding={
+                              "treshold_med_mm": {
+                                  "dtype": "float32",
+                                  "zlib": True,
+                                  "complevel": 7,}
+                              })
 
-        # Convert to xarray, save and clean memory
-        NoNan_counts = xr.DataArray(
-            NoNan_counts,
+    
+    # NonNans
+    da_NoNan = xr.DataArray(
+            arr_NoNans,
             dims=("pair", "Y"),
             coords={
                 "pair": inps["date12List"],
-                "Y": np.arange(0, NoNan_counts.shape[1], 1),
+                "Y": np.arange(0, arr_NoNans.shape[1], 1),
             },
         )
-        NoNan_counts = NoNan_counts.rename("NoNanCounts")
-        NoNan_counts.to_netcdf(
-            fname_counts_nonan,
+    da_NoNan = da_NoNan.rename("NoNanCounts")
+    da_NoNan.to_netcdf(
+            fn_nna_cts,
             encoding={"NoNanCounts": {"dtype": "int16", "zlib": True, "complevel": 7}},
         )
-        del NoNan_counts
+   
+    #-----------------------
+    #Analyze phase jup
+    analyze_phase_jump(inps, da_sev_pct, da_NoNan, da_med_abs_grad)
 
-        severity_alongX_proportion = xr.DataArray(
-            severity_alongX_proportion,
-            dims=("pair", "Y"),
-            coords={
-                "pair": inps["date12List"],
-                "Y": np.arange(0, severity_alongX_proportion.shape[1], 1),
-            },
-        )
+    #---------------End Main Operations ---------------------------------#
 
-        severity_alongX_proportion = severity_alongX_proportion.rename(
-            "severity_accumulated_along_range"
-        )
-        severity_alongX_proportion.to_netcdf(
-            fname_severity_1D,
-            encoding={
-                "severity_accumulated_along_range": {
-                    "dtype": "int16",
-                    "zlib": True,
-                    "complevel": 7,
-                    "_FillValue": -999,
-                }
-            },
-        )
-        del severity_alongX_proportion
-
-        severity_2d = xr.DataArray(
-            severity_2d,
-            dims=("pair", "Y", "X"),
-            coords={
-                "pair": inps["date12List"],
-                "Y": np.arange(0, severity_2d.shape[1], 1),
-            },
-        )
-        severity_2d = severity_2d.rename("severity_along_azimuth")
-        severity_2d.to_netcdf(
-            fname_severity_2D,
-            encoding={
-                "severity_along_azimuth": {
-                    "dtype": "int16",
-                    "zlib": True,
-                    "complevel": 7,
-                    "_FillValue": -999,
-                }
-            },
-        )
-        del severity_2d
-
-        # ds_abs_grad=xr.DataArray(ds_abs_grad,dims=('pair','Y','X'),coords={
-        #                         'pair':inps['date12List'],
-        #                         'Y':np.arange(0,ds_abs_grad.shape[1],1),
-        #                         'X':np.arange(0,ds_abs_grad.shape[2],1)})
-        # ds_abs_grad=ds_abs_grad.rename('absolute_azimuth_gradient_mm')
-        # ds_abs_grad.to_netcdf(fname_abs_grad_2D,encoding={'absolute_azimuth_gradient_mm':{'dtype': 'float32','zlib':True, 'complevel':7}})
-        # del ds_abs_grad
-
-    else:
-
-        # Prepare arrays
-        NoNan_counts = xr.DataArray(
-            NoNan_counts,
-            dims=("Y"),
-            coords={"Y": np.arange(0, NoNan_counts.shape[0], 1)},
-        )
-        NoNan_counts = NoNan_counts.assign_coords({"pair": date12})
-        NoNan_counts = NoNan_counts.expand_dims("pair")
-        NoNan_counts = NoNan_counts.rename("NoNanCounts")
-        NoNan_counts.to_netcdf(
-            fname_counts_nonan,
-            encoding={"NoNanCounts": {"dtype": "int16", "zlib": True, "complevel": 7}},
-        )
-        del NoNan_counts
-
-        severity_alongX_proportion = xr.DataArray(
-            severity_alongX_proportion,
-            dims=("Y"),
-            coords={"Y": np.arange(0, severity_alongX_proportion.shape[0], 1)},
-        )
-        severity_alongX_proportion = severity_alongX_proportion.assign_coords(
-            {"pair": date12}
-        )
-        severity_alongX_proportion = severity_alongX_proportion.expand_dims("pair")
-        severity_alongX_proportion = severity_alongX_proportion.rename(
-            "severity_accumulated_along_range"
-        )
-        severity_alongX_proportion.to_netcdf(
-            fname_severity_1D,
-            encoding={
-                "severity_accumulated_along_range": {
-                    "dtype": "int16",
-                    "zlib": True,
-                    "complevel": 7,
-                    "_FillValue": -999,
-                }
-            },
-        )
-        del severity_alongX_proportion
-
-        severity_2d = xr.DataArray(
-            severity_2d,
-            dims=("Y", "X"),
-            coords={
-                "Y": np.arange(0, severity_2d.shape[0], 1),
-                "X": np.arange(0, severity_2d.shape[1], 1),
-            },
-        )
-        severity_2d = severity_2d.assign_coords({"pair": date12})
-        severity_2d = severity_2d.expand_dims("pair")
-        severity_2d = severity_2d.rename("severity_along_azimuth")
-        severity_2d.to_netcdf(
-            fname_severity_2D,
-            encoding={
-                "severity_along_azimuth": {
-                    "dtype": "int16",
-                    "zlib": True,
-                    "complevel": 7,
-                    "_FillValue": -999,
-                }
-            },
-        )
-        del severity_2d
-
-        # ds_abs_grad=xr.DataArray(ds_abs_grad,dims=('Y','X'),coords={
-        #                             'Y':np.arange(0,ds_abs_grad.shape[0],1),
-        #                             'X':np.arange(0,ds_abs_grad.shape[1],1)})
-        # ds_abs_grad=ds_abs_grad.assign_coords({'pair':date12})
-        # ds_abs_grad=ds_abs_grad.expand_dims('pair')
-        # ds_abs_grad=ds_abs_grad.rename('absolute_azimuth_gradient_mm')
-        # ds_abs_grad.to_netcdf(fname_abs_grad_2D,encoding={'absolute_azimuth_gradient_mm':{'dtype': 'float32','zlib':True, 'complevel':7}})
-        # del ds_abs_grad
-
-    # # #---------------End Main Operations ---------------------------------#
-
-    inps["fname_absolute_azimuth_gradient"] = fname_abs_grad_2D
-    inps["fname_severity_1D"] = fname_severity_1D
 
     return inps
 
-
-def initialisation_parameters(inps):
-
-    inps["in_dir"] = os.path.abspath(inps["in_dir"])
-    inps["stack_fname"] = os.path.join(inps["in_dir"], "inputs/ifgramStack.h5")
-    inps["outDir_arr"] = os.path.join(inps["in_dir"], "quality_assessment_unwrapPhase")
-    inps["outDir_arr_2d"] = os.path.join(inps["outDir_arr"], "2D")
-    inps["outDir_arr_1d"] = os.path.join(inps["outDir_arr"], "1D")
-    inps["outDir_figure"] = os.path.abspath(
-        os.path.join(inps["in_dir"], "figure_phase_jump")
-    )
-    if inps["percentage_min"] == None:
-        inps["percentage_min"] = 90
-    if "plotIndividual" not in inps.keys():
-        inps["plotIndividual"] = False
-
-    return inps
 
 
 def run(inps):
-    inps = initialisation_parameters(inps)
-
-    skip = check_inputs(inps)
+    skip, inps = initiate_check(inps)
     if skip == True:
-        print("Error. Check input parameters\n")
-    else:
-        atr = readfile.read_attribute(inps["stack_fname"])
-        # Ensure out dir exists
-        if os.path.exists(inps["outDir_arr"]) is False:
-            os.makedirs(inps["outDir_arr"])
-            os.makedirs(inps["outDir_arr_2d"])
-            os.makedirs(inps["outDir_arr_1d"])
-        if os.path.exists(inps["outDir_figure"]) is False:
-            os.makedirs(inps["outDir_figure"])
-
-        # -------------
-        # Add input parameters necessary to run
-        # the script
-
-        inps["orbit"] = atr["ORBIT_DIRECTION"]
-
+         logging.info("Skip processing")
+    else: 
         if inps["pair"] == None:
+
             # Select input dates
-            date12List = ifgramStack(inps["stack_fname"]).get_date12_list(
-                dropIfgram=False
-            )
+            date12List = ifgramStack(inps["fn_stack"]).get_date12_list(
+                        dropIfgram=False
+                    )
+            logging.info("Total of interferograms found: {} ".format(len(date12List)))
+        
             inps["date12List"] = date12List
-            print("\n >> Total of unwrap Phase pairs found : %s \n" % len(date12List))
+           
+            ref = [date12.split("_")[0] for date12 in date12List]
+            sec = [date12.split("_")[1] for date12 in date12List]
+            dates = np.unique((ref + sec))
+            dates=list(dates)
+            inps["dates"] = dates.sort()
+        else:
+            date12List=[inps['pair']]
+            inps['date12List']=date12List
+        
+        inps = readData2VerticalGradient(inps)
 
-        # --------Run Calculate gradient
-        with tqdm(
-            total=4,
-            desc="Calculating Azimuth Gradient",
-            bar_format="{l_bar}{bar} [ time left: {remaining} ]",
-        ) as pbar:
-            if inps["pair"] == None:
-                # Select input dates
-                date12List = ifgramStack(inps["stack_fname"]).get_date12_list(
-                    dropIfgram=False
-                )
-                inps["date12List"] = date12List
-                # Separate input dates in reference and secondarys
-                ref = [date12.split("_")[0] for date12 in date12List]
-                sec = [date12.split("_")[1] for date12 in date12List]
-                dates, countPerDate = np.unique((ref + sec), return_counts=True)
-                inps["dates"] = list(dates)
-                inps["N_ifgs_date"] = list(countPerDate)
-                # print('\n >> Total of unwrap Phase pairs found : %s \n'%len(date12List))
-
-                inps["pbar"] = pbar
-                files = glob.glob(os.path.join(inps["outDir_arr_2d"], "*.nc"))
-
-                if len(files) > 0:
-                    print("\n>> Output directory not empty. Skiping calculations \n")
-                    inps["fname_absolute_azimuth_gradient"] = os.path.join(
-                        inps["outDir_arr_2d"], "absolute_azimuth_gradient_2D_mm.nc"
-                    )
-                    inps["fname_severity_1D"] = os.path.join(
-                        inps["outDir_arr_1d"],
-                        "severity_absolute_azimuth_gradient_along_range.nc",
-                    )
-                    inps["fname_severity_1D"] = os.path.join(
-                        inps["outDir_arr_1d"],
-                        "severity_absolute_azimuth_gradient_along_range.nc",
-                    )
-                    pbar.update(3)
-                    print("\n>>Updating stats..")
-                    ds_abs_grad = xr.open_dataarray(
-                        inps["fname_absolute_azimuth_gradient"]
-                    )
-                    ds_abs_grad = ds_abs_grad.data
-                    stats_ds_abs_grad = stats_ds_unw(ds_abs_grad)
-                    del ds_abs_grad
-
-                    ds_coh = readfile.read(
-                        inps["stack_fname"], datasetName="coherence"
-                    )[0]
-                    ds_coh[ds_coh == 0] = np.nan
-                    stats_coh = stats_ds_unw(ds_coh)
-                    del ds_coh
-                    inps["coherence_stats"] = stats_coh
-                    inps["abs_grad_stats"] = stats_ds_abs_grad
-
-                    save_global_stats2txt(inps)
-                    del stats_coh, stats_ds_abs_grad
-                    pbar.update(1)
-
-                else:
-                    inps = readData2VerticalGradient(inps)
-                    pbar.update(1)
-            else:
-                inps["pbar"] = pbar
-                inps = readData2VerticalGradient(inps)
-                pbar.update(1)
-        if inps["pair"] == None:
-            # -------------------------
-            # Find the severity files per date as reference/secondary
-            # -------------------------
-            print("\n>> Analyzing dicontinuities for each date ..\n")
-            analyse_PhaseJump_by_date(inps)
-        # --------------------
-        # Plot unwrapPhase next to gradient and severity of discontinuity
-        # --------------------
-
-        if inps["plotIndividual"] == True:
-            print("\n >> Plotting individual phase jumps ...\n")
-            if inps["pair"] == None:
-                ds_abs_grad = xr.open_dataarray(inps["fname_absolute_azimuth_gradient"])
-                severity_alongX_proportion = xr.open_dataarray(
-                    inps["fname_severity_1D"]
-                )
-                # -
-                ds_abs_grad = ds_abs_grad.squeeze()
-                ds_abs_grad = ds_abs_grad.to_numpy()
-                # -
-                severity_alongX_proportion = severity_alongX_proportion.squeeze()
-                severity_alongX_proportion = severity_alongX_proportion.to_numpy()
-                # -
-                for n in range(0, len(inps["date12List"])):
-
-                    date12 = inps["date12List"][n]
-                    inps["date12"] = date12
-                    name = os.path.join(
-                        inps["outDir_figure"],
-                        "unwrapPhase_absolute_vertical_gradient_%s.png" % date12,
-                    )
-                    da_unw = readfile.read(
-                        inps["stack_fname"], datasetName="unwrapPhase-%s" % date12
-                    )[0]
-
-                    inps.update(
-                        {
-                            "name": name,
-                            "ds_unw": da_unw,
-                            "ds_abs_grad": ds_abs_grad[n, :, :],
-                            "severity_alongX_proportion": severity_alongX_proportion[
-                                n, :
-                            ],
-                        }
-                    )
-
-                    PlotData_UnwGradient(inps)
-            else:
-                date12 = inps["pair"]
-                inps["date12"] = date12
-                name = os.path.join(
-                    inps["outDir_figure"],
-                    "unwrapPhase_absolute_vertical_gradient_%s.png" % date12,
-                )
-                da_unw = readfile.read(
-                    inps["stack_fname"], datasetName="unwrapPhase-%s" % date12
-                )[0]
-                ds_abs_grad = xr.open_dataarray(inps["fname_absolute_azimuth_gradient"])
-                inps.update(
-                    {
-                        "name": name,
-                        "ds_unw": da_unw,
-                        "ds_abs_grad": ds_abs_grad,
-                        "severity_alongX_proportion": severity_alongX_proportion,
-                    }
-                )
-
-                PlotData_UnwGradient(inps)
-            del da_unw
-            # Clean inps to continue processing
-            del inps["ds_unw"]
-            del inps["ds_abs_grad"]
-            del inps["severity_alongX_proportion"]
-
-
-initialisation_parameters(inps)
 run(inps)
-print("Done!\n")
+end = time.time()
+logging.info('Processing Time %s minutes'%(np.round((end - start)/60,2)))
+

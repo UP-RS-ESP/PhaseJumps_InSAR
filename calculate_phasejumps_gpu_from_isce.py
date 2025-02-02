@@ -67,7 +67,7 @@ def cmdLineParser():
     )
     parser.add_argument(
         "--burst_number",
-        help='Number of burst overlaps. Can be determined from ESD or other directories. For example, "ls -1 ESD/20240717_20240729/IW3/overlap_??.int | wc -l"',
+        help='Number of burst overlaps. Can be determined from ESD or other directories. For example, "ls -1 ESD/20240717_20240729/IW3/overlap_??.int | wc -l". Alternatively, you can look at the reference directory.',
         required=True,
     )
     parser.add_argument(
@@ -111,7 +111,7 @@ def abs_gradient_severity_complex_gpu(ifg, cor, phase2range):
     # calculate diff and store in array
     del ifg_gpu
     abs_grad *= phase2range
-    abs_grad *= 1000
+    abs_grad *= 1000 # convert to mm
     abs_grad[cor_gpu < 0.75] = cp.nan
     cor_median = np.round(np.median(cor_gpu).astype(cp.float32), 3)
     cor_mean = np.round(cp.nanmean(cor_gpu).astype(cp.float32), 3)
@@ -162,7 +162,7 @@ def abs_gradient_severity_float_gpu(ifg, cor, phase2range):
     abs_grad = cp.abs(cp.diff(ifg_gpu, axis=0, prepend=0))
     del ifg_gpu
     abs_grad *= phase2range
-    abs_grad *= 1000
+    abs_grad *= 1000 # convert to mm
     abs_grad[cor_gpu < 0.75] = cp.nan
     cor_median = np.round(np.median(cor_gpu).astype(cp.float32).get(), 3)
     cor_mean = np.round(cp.nanmean(cor_gpu).astype(cp.float32).get(), 3)
@@ -345,18 +345,18 @@ if __name__ == "__main__":
     # with warnings.catch_warnings():
     #    warnings.filterwarnings('ignore', r'All-NaN slice encountered')
 
-    args = cmdLineParser()
+#    args = cmdLineParser()
     from argparse import RawTextHelpFormatter
 
     args = argparse.ArgumentParser(
         description=DESCRIPTION, epilog=EXAMPLE, formatter_class=RawTextHelpFormatter
     )
-    args.ifg_path = "/raid-gpu2/InSAR/Olkaria/S1_tr130_asc/Olkaria2_COP_az2_rg7/merged_rg20az4/interferograms/"
-    args.burst_number = 2
-    args.global_stats_csv = "Olkaria_rg20_az4_global_stats.csv"
-    args.phasegradient_ts_PNG = "Olkaria_rg20_az4_phasegradient_ts.png"
-    args.phasegradient_az_PNG = "Olkaria_rg20_az4_phasegradient_az.png"
-    args.summed_phasegradient_az_PNG = "Olkaria_rg20_az4_summed_phasegradient.png"
+    args.ifg_path = "/raid-gpu2/InSAR/Bolivia/S1_Bermejo/desc10/Bermejo_COP_rg40_az8_noESD/merged/interferograms"
+    args.burst_number = 9
+    args.global_stats_csv = "Bermejo_rg40_az8_global_stats.csv"
+    args.phasegradient_ts_PNG = "Bermejo_rg40_az8_phasegradient_ts.png"
+    args.phasegradient_az_PNG = "Bermejo_rg40_az8_phasegradient_az.png"
+    args.summed_phasegradient_az_PNG = "Bermejo_rg40_az8_summed_phasegradient.png"
     args.wavelength = 0.05546576
     args.ifg_file = "filt_fine.unw.xml"
 
@@ -379,8 +379,8 @@ if __name__ == "__main__":
 
     # create large array to store gradient results
     logging.info(
-        "Creating arrays with %d x %d x %d dimensions for storing phase gradient statistics median and std. dev. for each row"
-        % (nr_ifg_files, img_length, 3)
+        "Creating arrays with %d x %d x %d dimensions for storing phase gradient statistics mean, median, 90p, and std. dev. for each row"
+        % (nr_ifg_files, img_length, 4)
     )
     # no need to store all data in large array - this can be calculated for each date separately
     # ds_array = np.empty( (nr_ifg_files, img_length, img_width), dtype=np.float32)
@@ -396,7 +396,7 @@ if __name__ == "__main__":
 
     logging.info("Loading phase files and calculating gradients.")
     logging.info(
-        "Storing only median, mean, and standard deviation of phase gradient for each row and for each date."
+        "Storing only median, mean, 90percentile, and standard deviation of phase gradient for each row and for each date."
     )
     logging.info(
         "Calculating global statistics from coherence and phase gradient for each time step."
@@ -448,8 +448,24 @@ if __name__ == "__main__":
     global_stats_array = np.c_[abs_grad_global_stats, cor_global_stats]
     save_global_stats2txt(args.global_stats_csv, refdates, secdates, global_stats_array)
 
-    # still need to add calculation for burst overlap identification
-    # Y_regular_spacing = np.nanmax(abs_grad_stats[:,:,0], axis=0) // burst_number
+    Y_regular_spacing = abs_grad_stats[:,:,0].shape[1]//burst_number
+    logging.info("Burst Ovlp areas must be located at ~ %d pixels intervals" % Y_regular_spacing)
+
+    phase_jumps = np.zeros(severity_alongX_proportion.shape, dtype=np.int8)
+    phase_jumps_idx = np.where(severity_alongX_proportion > percentage_min)
+    phase_jumps[phase_jumps_idx] = 1
+
+    # Findpairs with no phase_jumps (all rows are zero)
+    nophase_jumps_idx, = np.where(~np.all(phase_jumps == 0, axis=1) == True)
+
+    # phase_jumps = phase_jumps.dropna(dim="pair", how="all")
+    np.all(phase_jumps == 0, axis=0)
+    # Drop coordinates without phase_jumps
+    phase_jumps = phase_jumps.dropna(dim="Y", how="all")
+
+    date12phase_jumps = list(phase_jumps.pair.values)
+
+    phase_jumps_allDates = []
 
     if len(args.phasegradient_ts_PNG) > 0:
         logging.info(
