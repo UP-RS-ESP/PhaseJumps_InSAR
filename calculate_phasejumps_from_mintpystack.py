@@ -139,7 +139,7 @@ parser.add_argument(
 parser.add_argument(
     "--cmin",
     default=0.75,
-    help="Minimum coherence to mask out pixels [default: %(default)s].",
+    help="Minimum coherence to mask out pixels [default: %(default)s]. This is used to mask pixels from the unwrapped phase and gradient along the azimuth direction. It is furthermore used as a threshold for the mean coherence mask. You can increase the threshold if you have an area with high coherence (such as the dry Central Andes), and you may need to lower this in areas with low coherence to obtain a sufficient pixel number per row to detect phase jumps.",
     dest="cmin",
     type=float,
 )
@@ -147,7 +147,7 @@ parser.add_argument(
 parser.add_argument(
     "--pct",
     default=0.25,
-    help="Percentile of the distribution of coherence pixel number per row, to define reliable rows. Range value (0.0-1.0) [default: %(default)s].",
+    help="Percentile of the distribution of coherence pixel number per row, to define reliable rows. Range value (0.0-1.0) [default: %(default)s]. We don't recommend using values higher than 0.5, because this will use either 50% of the width or either the 50th percentile of the distribution of good pixels per row. Higher numbers will lower the number of pixels that can be used for detecting phase jumps. A values of 0.25 works in most cases.",
     dest="pct_row",
     type=float,
 )
@@ -155,7 +155,7 @@ parser.add_argument(
 parser.add_argument(
     "--msk-avgCoh",
     default=False,
-    help="Compare number of pixels per row and pair to a mask of average coherence.",
+    help="Compare the number of pixels per row and pair with an average coherence mask (mask defined according to --cmin), in order to improve the phase jump detection at the burst overlaps.",
     dest="mask_coh",
     action="store_true",
 )
