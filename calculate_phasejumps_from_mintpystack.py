@@ -32,7 +32,7 @@ import time
 
 start = time.time()
 
-debug = True
+debug = False
 # ---------------------------------------#
 # Plotting styles
 plt.rcParams["font.family"] = "Sans"
@@ -55,13 +55,14 @@ epilog_txt = """
     ls -1 reference/IW1/*.vrt | wc -l
     ls -1 secondarys/20210412/IW1/burst_0*.vrt | wc -l    
 
-    Note: \n 
-    1)The program requires full extension in the azimuth direction (i.e. the stacks must not be subset along the azimuth dimension). \n
-    2)This program is designed to detect phase jumps within a single sub-swath (IW1, IW2 or IW3). 
-It is not compatible yet with stacks created by merging sub-swaths (e.g., IW2-IW3 interferograms). In case of stacks resulting from merging subswaths, the option --sub-x can be used to run the program over an especific subswath
+    Note:
+    1)  The program requires full extension in the azimuth direction
+        (i.e. the stacks must not be subset along the azimuth dimension).
+    2)  This program is designed to detect phase jumps within a single sub-swath (IW1, IW2 or IW3).
+        It is not compatible yet with stacks created by merging sub-swaths (e.g., IW2-IW3 interferograms).
+        If you have a stack with merged subswaths, the option --sub-x can be used to run the program over a specific subswath.
     
     *****************************************************************
-    
     References
     1) Wang et al., 2017 "Improving burst aligment in tops interferometry with BESD",
         10.1109/LGRS.2017.2767575
@@ -71,11 +72,34 @@ It is not compatible yet with stacks created by merging sub-swaths (e.g., IW2-IW
     ******************************************************************
     """
 EXAMPLE = """
-    python calculate_phasejumps_from_mintpystack.py --in_dir /path/mintpy  --plot-ind --n-burst 9  \n
-    python calculate_phasejumps_from_mintpystack.py --in_dir /path/mintpy  --plot-ind --n-burst 9 --msk-avgCoh --pct 0.10 \n 
-    python calculate_phasejumps_from_mintpystack.py --in_dir /path/mintpy --pair 20160524_20160711 --n-burst 9  --cmin 0.8  \n 
+    python calculate_phasejumps_from_mintpystack.py --in_dir /path/mintpy  --plot-ind --n-burst 9
+    python calculate_phasejumps_from_mintpystack.py --in_dir /path/mintpy  --plot-ind --n-burst 9 --msk-avgCoh --pct 0.10
+    python calculate_phasejumps_from_mintpystack.py --in_dir /path/mintpy --pair 20160524_20160711 --n-burst 9  --cmin 0.8
+    python calculate_phasejumps_from_mintpystack.py --inDir ./ --n-burst 9
     
-    Extract azimuth gradient from unwrapped phase in radar coordinates and find phase jumps
+    Extract azimuth gradient from unwrapped phase in radar coordinates and find phase jumps.
+    Requires an input directory containing the ifgramStack.h5 (usually mintpy/inputs and this 
+    code just requires to set the mintpy directory).
+    
+    The number of burst can be extracted from the ISCE processing directory, 
+    for example for IW1 with: ls -1 reference/IW1/*.vrt | wc -l
+
+    The option --plot-ind plots all individual phase jumps as interferogram.
+    This is slow, but provides a high level of detail for analysis. Output pngs
+    are stored in pj_evaluation/figs and contain the unwrapped phase, 
+    absolute phase gradient, and the phase jump analysis. .
+
+    Several output files with statistical information are created in the mintpy
+    folder:
+    magnitude_phase_jumps.txt - contains the magnitude of the phase jump for each interferogram pair.
+    
+    exclude_listdate12_interferograms_by_phase_jump.txt - summary of pairs and
+    indices used for the phase-jump assessment
+    
+    exclude_dates_by_phase_jumps.txt - list of dates where more than 50% of
+    interferograms contained phase jump. These dates may be removed from
+    processing.
+
 """
 
 parser = argparse.ArgumentParser(
@@ -88,7 +112,7 @@ parser.add_argument(
     "--inDir",
     "-i",
     dest="in_dir",
-    help="Input folder containning input/ifgramStack.h5 \n",
+    help="Input folder containing input/ifgramStack.h5. This is usually just the mintpy folder.",
     default=os.getcwd(),
     required=True,
 )
@@ -102,7 +126,7 @@ parser.add_argument(
     required=True,
 )
 parser.add_argument(
-    "--pair", default=None, help="Perfom calculations only for pair", dest="pair"
+    "--pair", default=None, help="Perfom calculations only for specific pair (YYYYMMDD_YYYYMMDD).", dest="pair"
 )
 # parser.add_argument(
 #     "--pmin",
@@ -115,7 +139,7 @@ parser.add_argument(
 parser.add_argument(
     "--cmin",
     default=0.75,
-    help="Minimum coherence to mask out pixels [default: %(default)s]",
+    help="Minimum coherence to mask out pixels [default: %(default)s].",
     dest="cmin",
     type=float,
 )
@@ -123,7 +147,7 @@ parser.add_argument(
 parser.add_argument(
     "--pct",
     default=0.25,
-    help="Percentile of the distribution of coherence pixel number per row, to define reliable rows. Range value (0.0-1.0) [default: %(default)s]",
+    help="Percentile of the distribution of coherence pixel number per row, to define reliable rows. Range value (0.0-1.0) [default: %(default)s].",
     dest="pct_row",
     type=float,
 )
@@ -131,7 +155,7 @@ parser.add_argument(
 parser.add_argument(
     "--msk-avgCoh",
     default=False,
-    help="Compare number of pixels per row and pair to a mask of average coherence ",
+    help="Compare number of pixels per row and pair to a mask of average coherence.",
     dest="mask_coh",
     action="store_true",
 )
@@ -141,13 +165,13 @@ parser.add_argument(
     default=5.0,
     dest="pj_thr_mm",
     type=float,
-    help="Threshold in mm of maximum accumulated phase jump. [default: %(default)s]",
+    help="Threshold in mm of maximum accumulated phase jump. [default: %(default)s].",
 )
 
 parser.add_argument(
     "--sub-x",
     default=None,
-    help="Define the area of interest along x",
+    help="Define the area of interest along x.",
     dest="subX",
     nargs=2,
     type=int,
@@ -156,7 +180,7 @@ parser.add_argument(
 parser.add_argument(
     "--plot-ind",
     dest="plot_ind",
-    help="Plot individual phase jumps",
+    help="Plot individual phase jumps. This is slow, but provides a great level of detail for further analysis.",
     action="store_true",
 )
 
@@ -165,7 +189,6 @@ inps = args.__dict__
 
 
 def calculate_stats_arrays(ds_unw, ds_coh):
-
     stats_abs_grad = np.empty((3), dtype=np.float32)
     stats_coh = np.empty((3), dtype=np.float32)
 
@@ -400,15 +423,15 @@ def report_ifgs2drop(date12List, date12List_Skip, date12List_Drop, out_fn):
     with open(out_fn, "w") as fl:
         # Report dates skipped
         fl.write("*" * 10 + "\n\n")
-        fl.write("List pairs skipped from assessment (mean coherence < 0.4): \n")
+        fl.write("List of pairs skipped from assessment (mean coherence < 0.4): \n")
         fl.write(",".join(date12List_Skip) + "\n")
         fl.write("\nIndexes pairs skipped:\n")
         fl.write(",".join(idxDate12List_Skip) + "\n")
         fl.write("\nTotal pairs skipped: %s \n\n" % str(len(date12List_Skip)))
         fl.write("*" * 10 + "\n\n")
-        fl.write("\nPairs with phase jumps larger than threshold: \n")
+        fl.write("\nList of pairs with phase jumps larger than threshold: \n")
         fl.write(",".join(date12List_Drop) + "\n")
-        fl.write("\nIndexes pairs with phase jump larger than threshold:\n")
+        fl.write("\nIndices of pairs with phase jump larger than threshold:\n")
         fl.write(",".join(idxDate12List_Drop) + "\n")
         fl.write(
             "\nTotal pairs with phase jump larger than threshold: %s \n\n"
@@ -451,8 +474,8 @@ def report_pj(da_pj, date12List_Keep, out_fn_report):
     # Header report
     header = (
         "# Pairs found with systematic phase jumps \n"
-        "# Mag_Pj_mm: Magnitude of the phase jump, calculated as"
-        "\n\n mean(phase jump of overlapping areas)*number of overlapping areas \n"
+        "# Magnitude_PJ_mm: Magnitude of the phase jump in mm, calculated with: \n"
+        "# mean(phase jump of overlapping areas) * number of overlapping areas \n"
     )
 
     # Report
@@ -467,7 +490,7 @@ def report_pj(da_pj, date12List_Keep, out_fn_report):
         # -Report each pair, number of phase jumps and coordinates
         with open(out_fn_report, "w") as fl:
             fl.write(header)
-            fl.write("#\t DATE12 \tMag_Pj_mm\n")
+            fl.write("# DATE12 \t\tMagnitude_PJ_mm\n")
 
             for item in report_txt:
                 fl.write("%s\n" % item)
@@ -506,7 +529,7 @@ def report_stats(inps):
         "# Btemp: Temporal Baseline\n"
         "# Coh: Coherence\n"
         "# Grad: Absolute gradient along the azimuth direction \n"
-        "#Med: Median, Std: Standard deviation\n\n"
+        "# Med: Median, Std: Standard deviation\n\n"
     )
 
     stats_name = ["Grad_Median_mm", "Grad_Mean_mm", "Grad_Std_mm"]
@@ -687,12 +710,12 @@ def detect_pj_coordinates(inps, da_sev_pct, da_med_abs_grad, da_CohPx_cts):
         if (len(yList) > (n_burst - 1)) or (np.min(dy) < 0.75):
             logging.warning(
                 "Inconsistency in detected coordinates! "
-                "More coordinates than burst overlapping areas "
+                "There are more coordinates than burst overlapping areas."
                 "or there is not regular scpacing between coordinates. "
             )
             logging.info(
                 "Improving detection by increasing minimun coherence"
-                " and re-masking severity file"
+                "and re-masking severity file."
             )
 
             rerun = True
@@ -727,8 +750,8 @@ def detect_pj_coordinates(inps, da_sev_pct, da_med_abs_grad, da_CohPx_cts):
 
 def analyze_phase_jump(inps, da_sev_pct, da_CohPx_cts, da_med_abs_grad):
     """
-    Reads sev files and identifies phase phase jumps at regular intervals.
-    Phase jumps's Coordinates found are reported.
+    Reads severity (sev) files and identifies phase phase jumps at regular intervals.
+    The coordinates of phase jumps are reported.
 
     Parameters:
     -----------
@@ -738,15 +761,14 @@ def analyze_phase_jump(inps, da_sev_pct, da_CohPx_cts, da_med_abs_grad):
 
     inps : dict
         A dictionary containing the following keys:
-        - 'date12List' : list; List of interferograms. Format 'YYYYMMDD_yyyymmdd'
-        - 'min_pct' : float; Minimum  percentage to consider a peak of detected pixels as a phase jump.
-        - 'in_dir' : str; Input directory
-        - 'n_burst' : str; Number of bursts expected.
-        - 'min_pct' : float; Minimun percentage of pixels jumping along the row.
-        - 'out_dir' : str; Output directory.
-        - 'length' : int; file length, i.e. number of rows along azimuth
-        - 'n_burst' : int
-            Number of bursts in the dataset.
+        - 'date12List'  : list; List of interferograms. Format 'YYYYMMDD_yyyymmdd'
+        - 'min_pct'     : float; Minimum  percentage to consider a peak of detected pixels as a phase jump.
+        - 'in_dir'      : str; Input directory
+        - 'n_burst'     : str; Number of bursts expected.
+        - 'min_pct'     : float; Minimun percentage of pixels jumping along the row.
+        - 'out_dir'     : str; Output directory.
+        - 'length'      : int; file length, i.e. number of rows along azimuth
+        - 'n_burst'     : int; Number of bursts in the dataset.
 
     """
     # ------------------------------
@@ -826,7 +848,7 @@ def analyze_phase_jump(inps, da_sev_pct, da_CohPx_cts, da_med_abs_grad):
     )
 
     if debug == True:
-        logging.info("Coordinates of phase jumps %s " % yList)
+        logging.info("Coordinates of phase jumps %s." % yList)
 
     # -------------------------------
     # Detection based on height of the peak
@@ -1054,7 +1076,7 @@ def unwrap_phase2azimuth_gradient(inps):
     stats_coh = np.zeros((len(date12List), 3), dtype=float)
     date12List_Skip = []
 
-    logging.info("Calculating Absolute Gradient in the Azimuth Direction")
+    logging.info("Calculating Absolute Gradient in the Azimuth Direction.")
 
     with tqdm(
         total=len(date12List),
@@ -1271,7 +1293,7 @@ def unwrap_phase2azimuth_gradient(inps):
     )
 
     # -----------------------
-    # Analyze phase jup
+    # Analyze phase jump
     analyze_phase_jump(inps, da_sev_pct, da_CohPx_cts, da_med_abs_grad)
 
     # ---------------End Main Operations ---------------------------------#
@@ -1285,9 +1307,9 @@ def initiate_check(inps):
 
     inps["in_dir"] = os.path.abspath(inps["in_dir"])
     inps["fn_stack"] = os.path.join(inps["in_dir"], "inputs/ifgramStack.h5")
-    inps["out_dir"] = os.path.join(inps["in_dir"], "jumps_eval")
+    inps["out_dir"] = os.path.join(inps["in_dir"], "pj_evaluation")
     inps["fn_coh_cts"] = os.path.join(inps["out_dir"], "maskCoh_cts.nc")
-    inps["out_dir_fig"] = os.path.abspath(os.path.join(inps["out_dir"], "fig"))
+    inps["out_dir_fig"] = os.path.abspath(os.path.join(inps["out_dir"], "figs"))
 
     # ---
     # Define output name
@@ -1354,31 +1376,31 @@ def initiate_check(inps):
             x0, x1 = inps["subX"][0], inps["subX"][1]
             # Check that x0 could be used:
             if (x0 < 0) or (x1 < 0):
-                logging.error("No valid subset coordinates")
+                logging.error("No valid subset coordinates.")
                 skip = True
                 return skip, inps
             elif x1 <= inps["width"] - 1:
                 # Define the width
                 inps["width"] = x1 - x0
-                logging.info("Calculations over AOI of %s pixels" % inps["width"])
+                logging.info("Calculations are done over AOI of %s pixels." % inps["width"])
             else:
-                logging.error("No valid subset coordinates")
+                logging.error("No valid subset coordinates.")
                 skip = True
                 return skip, inps
 
         if "Y_FIRST" in atr.keys():
-            logging.error("The stack must be in radar coordinates")
+            logging.error("The stack must be in radar coordinates.")
             skip = True
             return skip, inps
 
     if inps["n_burst"] < 2:
-        logging.error("Number burst < 2, then there are not burst overlapping areas")
+        logging.error("Number burst < 2 - there are no burst overlapping areas.")
         skip = True
         return skip, inps
     # -
     files = glob.glob(os.path.join(inps["out_dir"], "*.nc"))
     if len(files) > 0:
-        logging.warning("Output directory not empty. Results will be overwritten")
+        logging.warning("Output directory not empty. Results will be overwritten.")
 
         # skip=True
         return skip, inps
