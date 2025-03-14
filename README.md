@@ -1,4 +1,4 @@
-# PhaseJumps_ISCE
+# PhaseJumps_InSAR
 
 Detecting phase jumps in unwrapped interferograms.
 
