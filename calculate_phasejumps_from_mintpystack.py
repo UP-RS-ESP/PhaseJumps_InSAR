@@ -613,7 +613,7 @@ def dynamic_threshold2mask(inps, da_CohPx_cts, da_sev_pct):
 # Phase Jump detection
 
 
-def refine_dectection(da_med_abs_grad, yList, ovlp_reg, n_burst):
+def refine_detection(da_med_abs_grad, yList, ovlp_reg, n_burst):
     # Total of pairs
     n_pairs = da_med_abs_grad.pair.shape[0]
     # Group coordinates
@@ -680,7 +680,7 @@ def coarse_detection_pj(da, n_burst, length):
 
 def detect_pj_coordinates(inps, da_sev_pct, da_med_abs_grad, da_CohPx_cts):
     """
-    Phase jump detection based on peak detection (coarse dectection step)
+    Phase jump detection based on peak detection (coarse detection step)
     followed by frequency and magnitude refinement (refine detection step)
 
     """
@@ -693,7 +693,7 @@ def detect_pj_coordinates(inps, da_sev_pct, da_med_abs_grad, da_CohPx_cts):
         yList = coarse_detection_pj(da=da_sev_pct, n_burst=n_burst, length=length)
 
         # 2) Refine coordinate position based on frequency & magnitude
-        yList = refine_dectection(da_med_abs_grad, yList, ovlp_reg, n_burst)
+        yList = refine_detection(da_med_abs_grad, yList, ovlp_reg, n_burst)
 
         return yList
 
