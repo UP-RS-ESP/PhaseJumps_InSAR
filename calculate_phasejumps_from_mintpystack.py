@@ -91,14 +91,18 @@ EXAMPLE = """
 
     Several output files with statistical information are created in the mintpy
     folder:
+    stats_absolute_gradient.txt - File containing summarized statistics (average, median,
+        standard deviation) of coherence and absolute phase gradient, as well as 
+        the temporal baseline per pair from the stack.
+
     magnitude_phase_jumps.txt - contains the magnitude of the phase jump for each interferogram pair.
     
     exclude_listdate12_interferograms_by_phase_jump.txt - summary of pairs and
-    indices used for the phase-jump assessment
+        indices used for the phase-jump assessment
     
     exclude_dates_by_phase_jumps.txt - list of dates where more than 50% of
-    interferograms contained phase jump. These dates may be removed from
-    processing.
+        interferograms contained phase jump. These dates may be removed from
+        processing.
 
 """
 
