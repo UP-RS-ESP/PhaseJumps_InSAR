@@ -6,17 +6,18 @@
 # V0.1 Oct-2024
 # V0.2 Jan-2025
 # V0.3 Feb-2025
-# Update: Apri-2025
 
 import warnings
 
 warnings.filterwarnings("ignore")
+
 import numpy as np
 import copy, logging
 import os, glob
 import argparse
 from tqdm import tqdm
 import datetime
+import time
 import xarray as xr
 import matplotlib.pyplot as plt
 
@@ -29,8 +30,6 @@ logging.basicConfig(
     level=logging.INFO,
     datefmt="%H:%M:%S",
 )
-
-import time
 
 start = time.time()
 
@@ -55,7 +54,6 @@ green = "#58D68D"
 
 # Others
 dpi = 300
-# -----------------------------------#
 
 epilog_txt = """
     *****************************************************************
@@ -81,6 +79,7 @@ epilog_txt = """
         10.1109/LGRS.2013.2252880
     ******************************************************************
     """
+
 EXAMPLE = """
     python calculate_phasejumps_from_mintpystack.py --in_dir /path/mintpy  --plot-ind --n-burst 9
     python calculate_phasejumps_from_mintpystack.py --in_dir /path/mintpy  --plot-ind --n-burst 9 --msk-avgCoh --pct 0.10
@@ -156,7 +155,7 @@ parser.add_argument(
 parser.add_argument(
     "--cmin",
     default=0.75,
-    help="Minimum coherence to mask out pixels [default: %(default)s]. This is used to mask pixels from the unwrapped phase and gradient along the azimuth direction. It is furthermore used as a threshold for the mean coherence mask. You can increase the threshold if you have an area with high coherence (such as the dry Central Andes), and you may need to lower this in areas with low coherence to obtain a sufficient pixel number per row to detect phase jumps.",
+    help="Minimum coherence to mask out pixels [default: 0.75]. This is used to mask pixels from the unwrapped phase and gradient along the azimuth direction. It is furthermore used as a threshold for the mean coherence mask. You can increase the threshold if you have an area with high coherence (such as the dry Central Andes), and you may need to lower this in areas with low coherence to obtain a sufficient pixel number per row to detect phase jumps.",
     dest="cmin",
     type=float,
 )
@@ -164,7 +163,7 @@ parser.add_argument(
 parser.add_argument(
     "--pct",
     default=0.25,
-    help="Percentile of the distribution of coherence pixel number per row, to define reliable rows. Range value (0.0-1.0) [default: %(default)s]. We don't recommend using values higher than 0.5, because this will use either 50% of the width or either the 50th percentile of the distribution of good pixels per row. Higher numbers will lower the number of pixels that can be used for detecting phase jumps. A values of 0.25 works in most cases.",
+    help="Percentile of the distribution of coherence pixel number per row, to define reliable rows. Range value (0.0-1.0) [default: 0.25]. We don't recommend using values higher than 0.5, because this will use either 50perc. of the width or either the 50th percentile of the distribution of good pixels per row. Higher numbers will lower the number of pixels that can be used for detecting phase jumps. A values of 0.25 works in most cases.",
     dest="pct_row",
     type=float,
 )
@@ -182,7 +181,7 @@ parser.add_argument(
     default=5.0,
     dest="pj_thr_mm",
     type=float,
-    help="Threshold in mm of maximum accumulated phase jump. [default: %(default)s].",
+    help="Threshold in mm of maximum accumulated phase jump. [default: 5.0].",
 )
 
 parser.add_argument(
@@ -318,7 +317,7 @@ def plot_ind(arr_unw, arr_abs_grad, int_pct, min_pct, fn_out, date12, orbit):
     # Adjust layout for better spacing
     fig.subplots_adjust(wspace=0.3)
 
-    fig.savefig(fn_out, dpi=150)
+    fig.savefig(fn_out, dpi=dpi)
 
     plt.clf()
     plt.close()
@@ -355,7 +354,7 @@ def plot_time_series_pj(da_pj, pj_thr, date12List_Keep, date12List_Drop, out_dir
     idx_drop = [date12List_Keep.index(i) for i in date12List_Drop]
 
     # -
-    fig, axs = plt.subplots(figsize=(16, 9), dpi=300)
+    fig, axs = plt.subplots(figsize=(16, 9), dpi=dpi)
     # Pairs  kept
     axs.scatter(
         ref_date[idx_df],
@@ -394,7 +393,7 @@ def plot_time_series_pj(da_pj, pj_thr, date12List_Keep, date12List_Drop, out_dir
     axs.legend(fontsize=12)
 
     fig.tight_layout()
-    fig.savefig(out_fig, dip=300)
+    fig.savefig(out_fig, dpi=dpi)
 
     del ref_date, idx_df, idx_drop
 
@@ -692,7 +691,7 @@ def mask_int(da_CohPx_cts, da_int_pct, inps):
         if inps["orbit"].lower().startswith("a"):
             axs[0].invert_yaxis()
 
-        fig.tight_layout()
+        # fig.tight_layout()
         fig.savefig(out_fig, dpi=dpi)
 
     # ----------------------#
@@ -811,7 +810,7 @@ def mask_int(da_CohPx_cts, da_int_pct, inps):
         axs[0].set_ylabel("Y (Azimuth)")
         axs[0].set_xlabel("X (Range)")
         axs[1].set_xlabel("X (Range)")
-        axs[2].set_xlabel("Cell Counts of Coherence > 0.75")
+        axs[2].set_xlabel("Cell Counts")
         axs[0].set_title("Avg. Coherence")
         axs[1].set_title("Mask")
         axs[2].set_title("Row Reliability")
@@ -834,7 +833,7 @@ def mask_int(da_CohPx_cts, da_int_pct, inps):
             axs[1].invert_xaxis()
 
         fig.tight_layout()
-        fig.savefig(out_fig, dpi=300)
+        fig.savefig(out_fig, dpi=dpi)
 
         del avgCoh, maskCoh
 
@@ -1632,9 +1631,9 @@ def initiate_check(inps):
     # subfix_int='int.nc'
 
     # 2D (time, azimuth)
-    subfix_int_pct = "int_pct.nc"
-    subfix_nna = "coh_cts.nc"
-    subfix_med = "med_az_grad_mm.nc"
+    subfix_int_pct = "intensity_pct.nc"
+    subfix_nna = "coherence_cts.nc"
+    subfix_med = "median_az_grad_mm.nc"
     # subfix_tre='treshold_mm.nc'
 
     if inps["pair"] == None:
