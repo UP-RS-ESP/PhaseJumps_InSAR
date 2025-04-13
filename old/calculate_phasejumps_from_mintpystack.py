@@ -6,10 +6,8 @@
 # V0.1 Oct-2024
 # V0.2 Jan-2025
 # V0.3 Feb-2025
-# Update: Apri-2025
 
 import warnings
-
 warnings.filterwarnings("ignore")
 import numpy as np
 import copy, logging
@@ -37,7 +35,7 @@ start = time.time()
 debug = False
 # ---------------------------------------#
 # Plotting styles
-plt.rcParams["font.family"] = "serif"
+plt.rcParams["font.family"] = "Sans"
 plt.rcParams["font.style"] = "normal"
 plt.rcParams["font.size"] = 11
 plt.rcParams["axes.labelsize"] = 8
@@ -47,27 +45,19 @@ plt.rcParams["axes.linewidth"] = 0.5
 plt.rcParams["xtick.major.width"] = 0.5
 plt.rcParams["ytick.major.width"] = 0.5
 
-# -Color
-magenta = "#EE3377"
-gray = "#AAB7B8"
-blue = "#5499C7"
-green = "#58D68D"
-
-# Others
-dpi = 300
 # -----------------------------------#
 
 epilog_txt = """
     *****************************************************************
     The number of bursts is listed during ISCE processing. 
-    It can be identified by looking into the reference or secondarys 
+    It can be indetified by looking into the reference or secondarys 
     directories of ISCE output. For example:
     ls -1 reference/IW1/*.vrt | wc -l
     ls -1 secondarys/20210412/IW1/burst_0*.vrt | wc -l    
 
     Note:
     1)  The program requires full extension in the azimuth direction
-        (i.e., the stacks must not be subset along the azimuth dimension).
+        (i.e. the stacks must not be subset along the azimuth dimension).
     2)  This program is designed to detect phase jumps within a single sub-swath (IW1, IW2 or IW3).
         It is not compatible yet with stacks created by merging sub-swaths (e.g., IW2-IW3 interferograms).
         If you have a stack with merged subswaths, the option --sub-x can be used to run the program over a specific subswath.
@@ -140,10 +130,7 @@ parser.add_argument(
     required=True,
 )
 parser.add_argument(
-    "--pair",
-    default=None,
-    help="Perfom calculations only for specific pair (YYYYMMDD_YYYYMMDD).",
-    dest="pair",
+    "--pair", default=None, help="Perfom calculations only for specific pair (YYYYMMDD_YYYYMMDD).", dest="pair"
 )
 # parser.add_argument(
 #     "--pmin",
@@ -220,15 +207,8 @@ def calculate_stats_arrays(ds_unw, ds_coh):
     return stats_abs_grad, stats_coh
 
 
-def year_fraction(date_in):
-    date_in = datetime.datetime.strptime(date_in, "%Y%m%d")
-    start = datetime.date(date_in.year, 1, 1).toordinal()
-    year_length = datetime.date(date_in.year + 1, 1, 1).toordinal() - start
-    return date_in.year + float(date_in.toordinal() - start) / year_length
-
-
 # -------Plot functions
-def plot_ind(arr_unw, arr_abs_grad, int_pct, min_pct, fn_out, date12, orbit):
+def plot_ind(arr_unw, arr_abs_grad, sev_pct, min_pct, fn_out, date12, orbit):
     fig_size = (10, 7)
 
     title = "Pair %s (Mask Coherence)" % date12
@@ -293,10 +273,10 @@ def plot_ind(arr_unw, arr_abs_grad, int_pct, min_pct, fn_out, date12, orbit):
     # Subplot 3: Jumps Proportion
     axs[2].set_title(r"$\Sigma$ $Jumps_{(i)}$", fontsize=11)
     axs[2].plot(
-        int_pct,
-        np.arange(0, int_pct.shape[0], 1),
+        sev_pct,
+        np.arange(0, sev_pct.shape[0], 1),
         lw=0.5,
-        c="k",
+        c="black",
     )
     axs[2].set_xlabel("Jumps [%Pixels]")
     axs[2].set_xticks([0, 50, 100])
@@ -314,7 +294,6 @@ def plot_ind(arr_unw, arr_abs_grad, int_pct, min_pct, fn_out, date12, orbit):
     for ax in axs[:2]:
         ax.set_aspect("auto")
         axs[2].set_aspect(aspect="auto", adjustable="box")
-
     # Adjust layout for better spacing
     fig.subplots_adjust(wspace=0.3)
 
@@ -324,79 +303,29 @@ def plot_ind(arr_unw, arr_abs_grad, int_pct, min_pct, fn_out, date12, orbit):
     plt.close()
 
 
-def plot_after_before(arr_af, arr_bef):
-    fig_size = (16, 9)
+# #----------------Aux fuctions
+# def group_coord_by_distance(y, fr, ovlp_reg):
 
-    title = "Pair (Mask Coherence)"
+#     y_gps = np.split(y, np.where(np.diff(y) > ovlp_reg/2)[0] + 1)
+#     fr_gps = np.split(fr, np.where(np.diff(y) > ovlp_reg/2)[0] + 1)
+#     del y,fr
 
-    # Plot
-    fig, axs = plt.subplots(
-        ncols=3,
-        figsize=fig_size,
-        sharex=False,
-        sharey=True,
-        gridspec_kw={"width_ratios": [3, 3, 1]},
-    )
-    fig.subplots_adjust(top=0.8)
+#     y_final = []
 
+#     for gp, fr_gp in zip(y_gps, fr_gps):
+#         if gp.shape[0] > 1:
+#             try:
+#                 # #Find the coordinate that have the max frequency
+#                 y_final.append(copy.deepcopy(gp[fr_gp == np.max(fr_gp)].item()))
 
-def plot_time_series_pj(da_pj, pj_thr, date12List_Keep, date12List_Drop, out_dir):
-    out_fig = os.path.join(out_dir, "timeserie_phase_jump.png")
-
-    # Take the reference date from the pair
-    ref_date = [i.split("_")[0] for i in date12List_Keep]
-    ref_date = [year_fraction(i) for i in ref_date]
-    ref_date = np.array(ref_date)
-
-    # Diff between Keep and Drop
-    date12List_df = sorted(list(set(date12List_Keep) - set(date12List_Drop)))
-    idx_df = [date12List_Keep.index(i) for i in date12List_df]
-
-    idx_drop = [date12List_Keep.index(i) for i in date12List_Drop]
-
-    # -
-    fig, axs = plt.subplots(figsize=(16, 9), dpi=300)
-    # Pairs  kept
-    axs.scatter(
-        ref_date[idx_df],
-        da_pj.sel(pair=date12List_df).data,
-        edgecolor=gray,
-        facecolor="none",
-        s=25,
-        lw=0.75,
-        label="Pairs kept",
-    )
-    # Pairs dropped
-    axs.scatter(
-        ref_date[idx_drop],
-        da_pj.sel(pair=date12List_Drop).data,
-        facecolor="none",
-        edgecolor=magenta,
-        s=25,
-        lw=0.75,
-        label="Pairs excluded",
-    )
-
-    # Plot mean phase jump per reference date
-    # Reemplace pairs values by reference date, but use the same name in the dim
-    da_pj["pair"] = ref_date
-
-    da_pj.groupby("pair").mean().plot(
-        color="k", linewidth=0.75, ax=axs, label="Mean Phase Jump"
-    )
-
-    axs.set_xlabel("Pairs by Reference Date", fontsize=12)
-    axs.set_ylabel("Phase Jump [mm]", fontsize=12)
-    axs.axhline(y=pj_thr, c=magenta, lw=0.75, zorder=0, label="Threshold")
-    axs.set_ylim(0, np.ceil(np.nanmax(da_pj.data)) + 1)
-
-    axs.set_title("Pairs with significant Phase Jump")
-    axs.legend(fontsize=12)
-
-    fig.tight_layout()
-    fig.savefig(out_fig, dip=300)
-
-    del ref_date, idx_df, idx_drop
+#             except:
+#                 #If the frequency is the same append the list
+#                 y_final.extend(copy.deepcopy(gp))
+#         elif gp.shape[0]==1:
+#             y_final.append(gp[0])
+#         else:
+#             continue
+#     return y_final
 
 
 # ------------------------------------#
@@ -481,6 +410,9 @@ def measure_pj(da, yList, n_burst):
 
 # --------------------------------#
 # Report
+# ---------------------------------#
+
+
 def ifg2idx(List1, List2):
     idx = [List1.index(i) for i in List2]
     return list(np.asarray(idx, dtype=str))
@@ -595,7 +527,7 @@ def report_stats(inps):
     header = (
         "# No Data Values (Zero Values) were excluded from calculations.\n"
         "# Coherence statistics were derived from all non-NaN pixels.\n"
-        "# Pixels with coherence < 0.75 were masked out during the calculation of absolute azimuth gradient and corresponding intensity.\n"
+        "# Pixels with coherence < 0.75 were masked out during the calculation of absolute azimuth gradient and corresponding severity.\n"
         "# The number of masked-out pixels varies between pairs.\n"
         "## Column Names/Prefixes:\n"
         "# Btemp: Temporal Baseline\n"
@@ -624,7 +556,7 @@ def report_stats(inps):
 
 # -----------------------------#
 # Mask
-def remove_trend(da, n_burst, length, inps, mode="normalize", step=None):
+def remove_trend(da, n_burst, length, mode="normalize", step=None):
     if mode == "normalize":
         da_median = da.median(dim="pair")
         da /= da_median
@@ -640,251 +572,51 @@ def remove_trend(da, n_burst, length, inps, mode="normalize", step=None):
     return da
 
 
-def mask_int(da_CohPx_cts, da_int_pct, inps):
-    # Mask in two steps
-    def plot_masked(inps, da_unmasked, da_mask_th, da_mask_coh=None):
-        out_fig = os.path.join(inps["out_dir_fig"], "masked_intensity.png")
-        # -------------------------------
-        # da_unmasked: array  after network selection
-        # da_mask_th: array after masking by threshold
-        # da_mask_coh: array after masking by coherence
-        # -------------------------------
-        # Figure Final
-        vmax, vmin = np.nanpercentile(da_unmasked, 98), np.nanpercentile(da_unmasked, 2)
-        ncols = 2
-        if da_mask_coh is not None:
-            ncols = 3
+def mask_by_avgCoh(inps, da_sev_pct, da_CohPx_cts):
 
-        # -
-        fig, axs = plt.subplots(figsize=(14, 8), ncols=ncols, sharey=True, sharex=True)
+    # calculate average coherence WITHOUT excluding pairs
+    avgCoh = ut.temporal_average(
+        inps["fn_stack"], datasetName="coherence", outFile=False
+    )[0]
 
-        def plot_basic():
-            cbar = axs[0].imshow(
-                da_unmasked.data.T, cmap="viridis", vmin=vmin, vmax=vmax, aspect="auto"
-            )
-            axs[1].imshow(
-                da_mask_th.data.T, cmap="viridis", vmin=vmin, vmax=vmax, aspect="auto"
-            )
+    maskCoh = np.zeros(avgCoh.shape, dtype="int")
 
-            axs[0].set_ylabel("Y (Azimuth coordinate)")
-            axs[0].set_xlabel("Pair number")
-            axs[0].set_title("Unmasked")
-            return cbar
+    maskCoh = np.where(avgCoh >= inps["cmin"], 1, 0)
 
-        if da_mask_coh is not None:
+    arr_maskCoh_sum = np.nansum(maskCoh, axis=1)
 
-            cbar = plot_basic()
-            axs[2].imshow(
-                da_mask_coh.data.T, cmap="viridis", vmin=vmin, vmax=vmax, aspect="auto"
-            )
-            axs[1].set_title("Initial Masking")
-            axs[2].set_title("Final Masking")
-            axs[2].set_xlabel("Pair number")
-        else:
-            cbar = plot_basic()
-            axs[1].set_title("Final Masking")
+    del avgCoh, maskCoh
 
-        fig.suptitle("Preprocessing of intensity")
-        fig.subplots_adjust(right=0.85)
-        cbar_ax = fig.add_axes([0.88, 0.15, 0.04, 0.7])
-        fig.colorbar(cbar, cax=cbar_ax, orientation="vertical", label="intensity [%]")
+    # Compare ammount of coh pixels per row to a mask of coherence
+    da_sev_pct = da_sev_pct.where(da_CohPx_cts >= arr_maskCoh_sum)
+    return da_sev_pct
 
-        if inps["orbit"].lower().startswith("a"):
-            axs[0].invert_yaxis()
 
-        fig.tight_layout()
-        fig.savefig(out_fig, dpi=dpi)
+def dynamic_threshold2mask(inps, da_CohPx_cts, da_sev_pct):
+    # ----------
+    t_CohPx = np.nanpercentile(da_CohPx_cts, inps["pct_row"] * 100)
+    t_width = inps["width"] * inps["pct_row"]
+    # ----------
+    if t_width > t_CohPx:
+        da_sev_pct.data = np.where(da_CohPx_cts.data > t_width, da_sev_pct.data, np.nan)
 
-    # ----------------------#
-    # Masks
-    # ----------------------#
-    def dynamic_threshold2mask(da_CohPx_cts, da_int_pct, inps):
-        # ----------
-        t_CohPx = np.nanpercentile(da_CohPx_cts, inps["pct_row"] * 100)
-        t_width = inps["width"] * inps["pct_row"]
-        # ----------
-        if t_width > t_CohPx:
-            t2plot, label = t_width, "Threshold ({}% of the rows total)".format(
-                int(inps["pct_row"] * 100)
-            )
-            da_int_pct.data = np.where(
-                da_CohPx_cts.data > t_width, da_int_pct.data, np.nan
-            )
-
-            # Activate mask  based on coherence to further mask out rows
-            logging.info(
-                "Additional Masking based on Average Coherence activated, due to general low coherence"
-                % np.round(inps["cmin"], 2)
-            )
-            inps["mask_coh"] = True
-
-        else:
-            t2plot, label = t_CohPx, "Threshold ({}th percentile)".format(
-                int(inps["pct_row"] * 100)
-            )
-            da_int_pct = da_int_pct.where(da_CohPx_cts > t_CohPx)
-
-        # -------------------------------#
-        # #FIGURE
-        # arr=da_CohPx_cts.data.copy()
-        # #-
-        # out_fig=os.path.join(inps['out_dir_fig'],'hist_coherence_cts_per_row.png')
-        # #-
-        # fig,axs=plt.subplots(figsize=(4,3),dpi=300)
-        # axs.hist(arr[~np.isnan(arr)], bins=20,color=gray,
-        #       alpha=0.75)
-        # axs.axvline(t2plot,color=magenta)
-        # axs.text(0.5,0.5,label,transform=axs.transAxes,
-        #          fontsize=9)
-        # axs.set_ylabel('Frequency')
-        # axs.set_xlabel('Cell Counts per Row')
-        # axs.set_title('Dynamic Row-Reliability Threshold')
-        # fig.tight_layout()
-
-        # fig.savefig(out_fig,dpi=300)
-
-        # del arr
-        return inps, da_int_pct
-
-    def mask_by_avgCoh(da_CohPx_cts, da_int_pct, inps):
-
-        out_dir_fig = inps["out_dir_fig"]
-        orbit = inps["orbit"]
-
-        # calculate average coherence WITHOUT excluding pairs
-        avgCoh = ut.temporal_average(
-            inps["fn_stack"], datasetName="coherence", outFile=False
-        )[0]
-        if inps["subX"] is not None:
-            x0, x1 = np.min(inps["subX"]), np.max(inps["subX"])
-            avgCoh = avgCoh[:, x0:x1]
-        maskCoh = np.zeros(avgCoh.shape, dtype="int")
-
-        maskCoh = np.where(avgCoh >= inps["cmin"], 1, 0)
-
-        arr_maskCoh_sum = np.nansum(maskCoh, axis=1)
-
-        # Compare ammount of coh pixels per row to a mask of coherence
-        da_int_pct = da_int_pct.where(da_CohPx_cts >= arr_maskCoh_sum)
-
-        # -----------------#
-        # FIGURE
-        # -----------------#
-        out_fig = os.path.join(out_dir_fig, "average_coherence_mask.png")
-
-        fig, axs = plt.subplots(
-            figsize=(7, 4),
-            ncols=3,
-            sharey=True,
-            sharex=False,
-            gridspec_kw={"width_ratios": [3, 3, 1]},
+        # Activate mask  based on coherence to further mask out rows
+        logging.info(
+            "Mask based on average coherence, with %s as minimum coherence"
+            % np.round(inps["cmin"], 2)
         )
-        fig.subplots_adjust(top=0.8)
-        cbar_coh = axs[0].imshow(
-            avgCoh, cmap="Greys_r", interpolation="nearest", vmin=0.3, vmax=0.90
-        )
-        axs[1].imshow(
-            maskCoh,
-            cmap="viridis",
-            interpolation="nearest",
-        )
+        inps["mask_coh"] = True
 
-        axs[2].fill_betweenx(
-            x2=da_CohPx_cts.min(dim="pair").values,
-            x1=da_CohPx_cts.max(dim="pair").values,
-            y=np.arange(0, da_CohPx_cts.Y.shape[0], 1),
-            color=gray,
-            alpha=0.5,
-        )
-        axs[2].plot(
-            arr_maskCoh_sum,
-            np.arange(0, arr_maskCoh_sum.shape[0], 1),
-            c=magenta,
-            lw=0.75,
-        )
+    else:
+        da_sev_pct = da_sev_pct.where(da_CohPx_cts > t_CohPx)
 
-        axs[2].text(
-            0.20, 0.95, "Mask", c=magenta, transform=axs[2].transAxes, fontsize=9
-        )
-        axs[2].text(0.20, 0.90, "Pairs", c=gray, transform=axs[2].transAxes, fontsize=9)
-
-        axs[0].set_ylabel("Y (Azimuth)")
-        axs[0].set_xlabel("X (Range)")
-        axs[1].set_xlabel("X (Range)")
-        axs[2].set_xlabel("Cell Counts of Coherence > 0.75")
-        axs[0].set_title("Avg. Coherence")
-        axs[1].set_title("Mask")
-        axs[2].set_title("Row Reliability")
-        fig.suptitle("Coherence-based Row Reliability")
-        fig.colorbar(
-            cbar_coh,
-            ax=axs[0],
-            pad=0.03,
-            shrink=0.6,
-            aspect=30,
-            orientation="vertical",
-            label="Coherence",
-        )
-
-        if orbit.lower().startswith("a"):
-            axs[0].invert_yaxis()
-
-        elif orbit.lower().startswith("d"):
-            axs[0].invert_xaxis()
-            axs[1].invert_xaxis()
-
-        fig.tight_layout()
-        fig.savefig(out_fig, dpi=300)
-
-        del avgCoh, maskCoh
-
-        return da_int_pct
-
-    # ---------------
-    # Prepare data
-    # ---------------
-    da_CohPx_cts = da_CohPx_cts.where(da_CohPx_cts != -999)
-    da_CohPx_cts = da_CohPx_cts.where(da_CohPx_cts != 0)
-
-    # For plotting
-    da_unmasked = da_int_pct.copy(deep=True)
-
-    # -----------------------#
-    # First mask
-    # -----------------------#
-    inps, da_int_pct = dynamic_threshold2mask(
-        inps=inps, da_CohPx_cts=da_CohPx_cts, da_int_pct=da_int_pct
-    )
-
-    da_mask_coh = None
-    # Make a copy for plotting
-    da_mask_th = da_int_pct.copy(deep=True)
-
-    # -----------------------#
-    # Second  mask
-    # -----------------------#
-    if inps["mask_coh"] == True:
-        #
-        da_int_pct = mask_by_avgCoh(
-            inps=inps, da_int_pct=da_int_pct, da_CohPx_cts=da_CohPx_cts
-        )
-        da_mask_coh = da_int_pct.copy(deep=True)
-    # ---------------#
-    # Final Figure
-    # ---------------#
-    plot_masked(
-        inps=inps,
-        da_unmasked=da_unmasked,
-        da_mask_th=da_mask_th,
-        da_mask_coh=da_mask_coh,
-    )
-    del da_mask_coh, da_mask_th, da_unmasked
-
-    return da_int_pct
+    return inps, da_sev_pct
 
 
-# Phase Jump detection
 # ------------------------------------------
+# Phase Jump detection
+
+
 def refine_detection(da_med_abs_grad, yList, ovlp_reg, n_burst):
     # Total of pairs
     n_pairs = da_med_abs_grad.pair.shape[0]
@@ -924,15 +656,15 @@ def refine_detection(da_med_abs_grad, yList, ovlp_reg, n_burst):
     return yList_out
 
 
-def coarse_detection_pj(da, n_burst, length, inps):
+def coarse_detection_pj(da, n_burst, length):
 
     # Number of pairs
     n_pairs = da.pair.shape[0]
 
     # Detrend
-    da_detrended = remove_trend(da=da, n_burst=n_burst, length=length, inps=inps)
+    da_detrended = remove_trend(da, n_burst, length)
 
-    # Calculate gradient of the intensity
+    # Calculate gradient of the severity
     arr_grad = np.diff(da_detrended.data, axis=1, prepend=0)
 
     # Obtain std
@@ -946,49 +678,11 @@ def coarse_detection_pj(da, n_burst, length, inps):
         y_temp = list(np.where(arr_grad[i, :] > (3 * std_pair[i]))[0])
         if len(y_temp) > 0:
             yList.extend(y_temp)
-    print(np.nanmax(arr_grad), np.nanmin(arr_grad))
-    # ------------------#
-    # New figure April-2025
-    out_fig = os.path.join(inps["out_dir_fig"], "detrended_intensity.png")
-    fig, axs = plt.subplots(ncols=2, sharey=True)
-    cbar = axs[0].imshow(
-        da_detrended.data.T, cmap="magma", vmin=0.5, vmax=1.5, aspect="auto"
-    )
-    axs[0].set_ylabel("Y (Azimuth coordinate)")
-    axs[0].set_xlabel("Pair number")
-    axs[0].set_title("Detrend")
-    fig.colorbar(
-        cbar,
-        ax=axs[0],
-        pad=0.03,
-        shrink=0.6,
-        aspect=30,
-        orientation="vertical",
-        label="Normalized intensity",
-    )
-
-    cbar = axs[1].imshow(arr_grad.T, cmap="RdBu", vmin=-0.1, vmax=0.1, aspect="auto")
-    axs[1].set_ylabel("Y (Azimuth coordinate)")
-    axs[1].set_xlabel("Pair number")
-    axs[1].set_title("Gradient")
-    fig.colorbar(
-        cbar,
-        ax=axs[1],
-        pad=0.03,
-        shrink=0.6,
-        aspect=30,
-        orientation="vertical",
-        label="Gradient of Normalized intensity",
-    )
-    fig.suptitle("Detection of Phase Jump at Burst Overlap")
-    if inps["orbit"].lower().startswith("a"):
-        axs[0].invert_yaxis()
-    fig.savefig(out_fig, dpi=dpi)
 
     return yList
 
 
-def detect_pj_coordinates(inps, da_int_pct, da_med_abs_grad, da_CohPx_cts=None):
+def detect_pj_coordinates(inps, da_sev_pct, da_med_abs_grad, da_CohPx_cts):
     """
     Phase jump detection based on peak detection (coarse detection step)
     followed by frequency and magnitude refinement (refine detection step)
@@ -1000,9 +694,7 @@ def detect_pj_coordinates(inps, da_int_pct, da_med_abs_grad, da_CohPx_cts=None):
 
     def steps():
         # 1) Find coordinates with phase jump
-        yList = coarse_detection_pj(
-            da=da_int_pct, n_burst=n_burst, length=length, inps=inps
-        )
+        yList = coarse_detection_pj(da=da_sev_pct, n_burst=n_burst, length=length)
 
         # 2) Refine coordinate position based on frequency & magnitude
         yList = refine_detection(da_med_abs_grad, yList, ovlp_reg, n_burst)
@@ -1014,48 +706,60 @@ def detect_pj_coordinates(inps, da_int_pct, da_med_abs_grad, da_CohPx_cts=None):
         # burst_overlapping areas that means the area has low coherence
         # then repeat 1-2
         # As well, if there area coordinates too close with the same frequency
-        # dy = np.round(np.diff(yList) / ovlp_reg, 2)
-        # ff = np.floor(dy)
-        # dy -= ff
-        # rerun = False
-
-        if len(yList) > (n_burst - 1):
+        dy = np.round(np.diff(yList) / ovlp_reg, 2)
+        ff = np.floor(dy)
+        dy -= ff
+        rerun = False
+        print(dy)
+        if (len(yList) > (n_burst - 1)) or (np.min(dy) < 0.75):
             logging.warning(
                 "Inconsistency in detected coordinates! "
                 "There are more coordinates than burst overlapping areas."
-                ""
+                "or there is not regular scpacing between coordinates. "
             )
-        elif (len(yList) == 1) and ((n_burst - 1) > 1):
-            logging.warning("A unique coordinate was found.")
+            logging.info(
+                "Improving detection by increasing minimun coherence"
+                "and re-masking severity file."
+            )
+
+            rerun = True
+
+            if debug == True:
+                print(yList)
+
+        return rerun
+
+    # -
+    d_coh = (0.95 - inps["cmin"]) / 5
+    # -
+    cmin = copy.deepcopy(inps["cmin"])
+
+    # -
+    for i in range(0, 5):
+        yList = steps()
+        rerun = check_result()
+        if rerun:
+            #
+            inps["cmin"] = cmin + (d_coh * i)
+            #
+            da_sev_pct = mask_by_avgCoh(inps, da_sev_pct, da_CohPx_cts)
         else:
-            # As well, if there area coordinates too close with the same frequency
-            dy = np.round(np.diff(yList) / ovlp_reg, 2)
-            ff = np.floor(dy)
-            dy -= ff
-            if np.min(dy) < 0.5:
-                logging.warning("There is not regular scpacing between coordinates. ")
+            break
 
-    yList = steps()
-    check_result()
-    out_txt = os.path.join(inps["in_dir"], "pj_coordinates.txt")
-    with open(out_txt, "w") as fl:
-        fl.write("#Coordinates of Phase Jump\n")
-        fl.write("#Y (row index)\n")
-        for item in yList:
-            fl.write(str(item) + "\n")
-        fl.close()
-
-    return da_int_pct, yList, inps
+    return da_sev_pct, yList, inps
 
 
-def analyze_phase_jump(inps, da_int_pct, da_CohPx_cts, da_med_abs_grad):
+# ------------------------------------#
+
+
+def analyze_phase_jump(inps, da_sev_pct, da_CohPx_cts, da_med_abs_grad):
     """
-    Reads intensity (int) files and identifies phase phase jumps at regular intervals.
+    Reads severity (sev) files and identifies phase phase jumps at regular intervals.
     The coordinates of phase jumps are reported.
 
     Parameters:
     -----------
-    da_int_pct: data array (pair, azimuth) ; percentage of pixels jumping by row,
+    da_sev_pct: data array (pair, azimuth) ; percentage of pixels jumping by row ,
     da_CohPx_cts: data array (pair, azimuth); Number of data pixels (no Nan) by row,
     da_med_abs_grad: data array (pair,azimuth);  median absolute gradient by row,
 
@@ -1119,18 +823,33 @@ def analyze_phase_jump(inps, da_int_pct, da_CohPx_cts, da_med_abs_grad):
             date12List_Keep=date12List_Keep,
             date12List_Skip=date12List_Skip,
         )
-        da_int_pct, _ = modify_network(
-            da_int_pct, date12List_Keep=date12List_Keep, date12List_Skip=date12List_Skip
+        da_sev_pct, _ = modify_network(
+            da_sev_pct, date12List_Keep=date12List_Keep, date12List_Skip=date12List_Skip
         )
 
-    # 2) Mask
-    da_int_pct = mask_int(da_CohPx_cts=da_CohPx_cts, da_int_pct=da_int_pct, inps=inps)
+    # No data
+    da_CohPx_cts = da_CohPx_cts.where(da_CohPx_cts != -999)
+    da_CohPx_cts = da_CohPx_cts.where(da_CohPx_cts != 0)
+
+    # Mask out rows based on number of pixels per row, per pair
+    inps, da_sev_pct = dynamic_threshold2mask(
+        inps, da_CohPx_cts=da_CohPx_cts, da_sev_pct=da_sev_pct
+    )
+
+    # Apply an extra mask of coherence
+    if inps["mask_coh"] == True:
+        da_sev_pct = mask_by_avgCoh(
+            inps, da_sev_pct=da_sev_pct, da_CohPx_cts=da_CohPx_cts
+        )
+
     # ------------------
     # STAGE 2:
     # Phase jump coordinates detection
     # ------------------
 
-    da_int_pct, yList, inps = detect_pj_coordinates(inps, da_int_pct, da_med_abs_grad)
+    da_sev_pct, yList, inps = detect_pj_coordinates(
+        inps, da_sev_pct, da_med_abs_grad, da_CohPx_cts
+    )
 
     if debug == True:
         logging.info("Coordinates of phase jumps %s." % yList)
@@ -1144,7 +863,7 @@ def analyze_phase_jump(inps, da_int_pct, da_CohPx_cts, da_med_abs_grad):
     # with tqdm(total=n_iter, desc="Estimating Phase Jumps Coordinates",ncols=100, bar_format="{l_bar}{bar} [ time left: {remaining} ]") as pbar:
     #     for n in range(0,n_iter):
     #         min_pct_1=min_pct+n*d_pct
-    #         y_iter.extend(get_phase_jump_cord(da_int_pct,min_pct_1,ovlp_reg,n_burst))
+    #         y_iter.extend(get_phase_jump_cord(da_sev_pct,min_pct_1,ovlp_reg,n_burst))
     #         pbar.update(1)
 
     # y,fr=np.unique(y_iter, return_counts=True)
@@ -1213,17 +932,12 @@ def analyze_phase_jump(inps, da_int_pct, da_CohPx_cts, da_med_abs_grad):
     pj_thr = inps["pj_thr_mm"]
 
     # Mask out & remove pairs with phase jumps below threshold
-    # -#
-    # Do not change da_pj, to plot it
-    # da_pj = da_pj.where(da_pj >= pj_thr)
-    # da_pj = da_pj.dropna(dim="pair")
-    # -#
-    idx = np.where(da_pj.data >= pj_thr)
+    da_pj = da_pj.where(da_pj >= pj_thr)
+    da_pj = da_pj.dropna(dim="pair")
 
     # Update list of dates12
-    date12List_Drop = np.array(date12List_Keep)[idx]
+    date12List_Drop = sorted(list(da_pj.pair.values))
 
-    # Report
     report_ifgs2drop(
         date12List=date12List,
         # - dates12List_Skip : from the assessment
@@ -1231,15 +945,6 @@ def analyze_phase_jump(inps, da_int_pct, da_CohPx_cts, da_med_abs_grad):
         # - dates12List_Drop : magnitude of the phase jump > threshold
         date12List_Drop=date12List_Drop,
         out_fn=out_fn_excList_ifg,
-    )
-
-    # Plot
-    plot_time_series_pj(
-        da_pj=da_pj,
-        pj_thr=pj_thr,
-        date12List_Keep=date12List_Keep,
-        date12List_Drop=date12List_Drop,
-        out_dir=inps["out_dir_fig"],
     )
 
     # -----------------------------------------#
@@ -1333,7 +1038,7 @@ def unwrap_phase2azimuth_gradient(inps):
     # Y=length=azimuth coordinate
     # X=width=range coordinates
     length = inps["length"]
-    width = inps["width"]
+    # width=inps['width']
     date12List = inps["date12List"]
     wavelength = inps["wavelength"]
     phase2range = wavelength / (4.0 * np.pi)
@@ -1344,11 +1049,11 @@ def unwrap_phase2azimuth_gradient(inps):
     # -----------------
     # 3D (time, azimuth, range)
     # fn_abs_grad=inps['fn_abs_grad_2D']
-    # fn_int = inps['fn_int']
+    # fn_sev = inps['fn_sev']
 
     # 2D (time, azimuth)
     fn_pxCoh_cts = inps["fn_pxCoh_cts"]
-    fn_int_pct = inps["fn_int_pct"]
+    fn_sev_pct = inps["fn_sev_pct"]
     fn_med_abs_grad = inps["fn_med_abs_grad"]
     # fn_treshold=inps['fn_tre']
 
@@ -1365,11 +1070,9 @@ def unwrap_phase2azimuth_gradient(inps):
     # ds_grad_az=np.diff(ds_unw, axis=0,prepend=0)
 
     # Create containers for arrays
-    arr_med_grad_acrX = np.zeros((len(date12List), length), dtype=float)
-    arr_int_y = np.zeros((len(date12List), length), dtype=float)
-    # arr_plot=np.zeros((length,width),dtype=float)
-    # arr_abs2plot=np.zeros((length,width),dtype=float)
-    # arr_threshold = np.zeros(len(date12List), dtype=float)
+    arr_med_sev_acrX = np.zeros((len(date12List), length), dtype=float)
+    arr_sev_y = np.zeros((len(date12List), length), dtype=float)
+    arr_threshold = np.zeros(len(date12List), dtype=float)
     arr_NoNans = np.zeros((len(date12List), length), dtype=int)
     arr_NoNans -= 999
     # Create containers for stats
@@ -1384,7 +1087,7 @@ def unwrap_phase2azimuth_gradient(inps):
         desc="Pairs processed",
         bar_format="{l_bar}{bar} [ time left: {remaining} ]",
     ) as pbar:
-        # Loop to generate intensity
+        # Loop to generate severity
         for idx, pair in enumerate(date12List):
 
             # ---------------------------------#
@@ -1426,11 +1129,6 @@ def unwrap_phase2azimuth_gradient(inps):
             # Convert to displacement in milimeters
             arr_abs_grad *= phase2range
             arr_abs_grad *= 1000
-            # --------------------
-            # Delete
-            # arr_abs2plot=np.nansum(np.dstack((arr_abs_grad,arr_abs2plot)),2)
-            # ----------------
-
             # Set outliers to nan as well, BEFORE deriving statistics
             p99 = np.nanpercentile(arr_abs_grad, 99)
 
@@ -1448,52 +1146,50 @@ def unwrap_phase2azimuth_gradient(inps):
                 date12List_Skip.append(pair)
 
             # -----------------------------------------
-            # Calculate the int (magnitude) of the phase jump
+            # Calculate the sev (magnitude) of the phase jump
             # -----------------------------------------
             # the threshold is the median of the absolute gradient
             threshold = stats_abs_grad[idx, 0]
 
             # -----------------------
             ### This option produces a noiser mask
-            # grad_mask = np.round(np.divide(arr_abs_grad, threshold), 0)
-            # grad_mask[grad_mask > 1] = 1
+            # sev = np.round(np.divide(arr_abs_grad, threshold), 0)
+            # sev[sev > 1] = 1
             # -----------------------
 
             # Dims (row-1,col)=(azimuth,range)=(y,x)
-            grad_mask = np.zeros(arr_abs_grad.shape, dtype=float)
-            grad_mask = np.where(arr_abs_grad >= threshold, 1, grad_mask)
-            # arr_plot+=grad_mask
-            grad_mask[np.isnan(arr_abs_grad)] = np.nan
+            sev = np.zeros(arr_abs_grad.shape, dtype=float)
+            sev = np.where(arr_abs_grad >= threshold, 1, sev)
+            mask = np.isnan(arr_abs_grad)
+            sev[mask] = np.nan
 
             # Dims (row-1)
-            int_acrX = np.nansum(grad_mask, axis=1)
+            sev_acrX = np.nansum(sev, axis=1)
 
             # Count NoNans pixels to 1) compute percentage along the row, and
             # 2) determine if the row is reliable,
             # given the ammount of pixels no nans along that row
-            NoNan_acrX_cts = np.count_nonzero(~np.isnan(grad_mask), axis=1)
+            NoNan_acrX_cts = np.count_nonzero(~np.isnan(sev), axis=1)
             NoNan_acrX_cts = NoNan_acrX_cts.astype(int)
 
             np.seterr(invalid="ignore")
 
-            # ----------------------#
-            # Calculate intensity
-            # Percentage of pixels jumping
+            # Express as percentage from pixels
             # ---------------------
             # OPTION1
-            int_pct = np.divide(int_acrX, NoNan_acrX_cts) * 100
-            int_pct = np.round(int_pct, 1)
+            sev_pct = np.divide(sev_acrX, NoNan_acrX_cts) * 100
+            sev_pct = np.round(sev_pct, 1)
             # ----------
             # OPTION2
-            # int_pct = np.divide(int_acrX, width) * 100
-            # int_pct = np.round(int_pct, 1  )
+            # sev_pct = np.divide(sev_acrX, width) * 100
+            # sev_pct = np.round(sev_pct, 1  )
 
             med_acrX = np.nanmedian(arr_abs_grad, axis=1)
 
             # ---------Copy to result
-            arr_int_y[idx, :] = copy.deepcopy(int_pct)
-            arr_med_grad_acrX[idx, :] = copy.deepcopy(med_acrX)
-            # arr_threshold[idx] = copy.deepcopy(threshold)
+            arr_sev_y[idx, :] = copy.deepcopy(sev_pct)
+            arr_med_sev_acrX[idx, :] = copy.deepcopy(med_acrX)
+            arr_threshold[idx] = copy.deepcopy(threshold)
             arr_NoNans[idx, :] = copy.deepcopy(NoNan_acrX_cts)
 
             if inps["plot_ind"] == True:  # or (debug==True):
@@ -1504,14 +1200,14 @@ def unwrap_phase2azimuth_gradient(inps):
                 plot_ind(
                     arr_unw=arr_unw,
                     arr_abs_grad=arr_abs_grad,
-                    int_pct=int_pct,
+                    sev_pct=sev_pct,
                     min_pct=80,  # min_pct,
                     fn_out=fn_out,
                     date12=pair,
                     orbit=inps["orbit"],
                 )
 
-            del int_pct, med_acrX, arr_unw, arr_abs_grad, arr_coh, int_acrX
+            del sev_pct, med_acrX, arr_unw, arr_abs_grad, arr_coh, sev_acrX
             pbar.update(1)
 
     # Update
@@ -1522,16 +1218,11 @@ def unwrap_phase2azimuth_gradient(inps):
     inps["stats_abs_grad"] = stats_abs_grad
     report_stats(inps)
 
-    # --------------------------
-    # np.save(os.path.join(inps["out_dir"],'mask_grad_cummulative.npy'),
-    #         arr_plot,allow_pickle=True)
-    # np.save(os.path.join(inps["out_dir"],'abs_grad_cummulative.npy'),
-    #         arr_abs2plot,allow_pickle=True)
-    # ------------------------
     # All files saved are of dims=(pairs,Y)
+
     # Az gradient
     da_med_abs_grad = xr.DataArray(
-        arr_med_grad_acrX,
+        arr_med_sev_acrX,
         dims=("pair", "Y"),
         coords={
             "pair": date12List,
@@ -1552,21 +1243,21 @@ def unwrap_phase2azimuth_gradient(inps):
         },
     )
 
-    # intensity
-    da_int_pct = xr.DataArray(
-        arr_int_y,
+    # Severity
+    da_sev_pct = xr.DataArray(
+        arr_sev_y,
         dims=("pair", "Y"),
         coords={
             "pair": date12List,
             "Y": np.arange(0, length, 1),
         },
     )
-    da_int_pct = da_int_pct.rename("int_pct")
-    da_int_pct = da_int_pct.where(da_int_pct != 0)
-    da_int_pct.to_netcdf(
-        fn_int_pct,
+    da_sev_pct = da_sev_pct.rename("sev_pct")
+    da_sev_pct = da_sev_pct.where(da_sev_pct != 0)
+    da_sev_pct.to_netcdf(
+        fn_sev_pct,
         encoding={
-            "int_pct": {
+            "sev_pct": {
                 "dtype": "int16",
                 "zlib": True,
                 "complevel": 7,
@@ -1575,7 +1266,7 @@ def unwrap_phase2azimuth_gradient(inps):
         },
     )
 
-    # #Threshold per pair to define intensity
+    # #Threshold per pair to define severity
     # da_treshold=xr.DataArray(
     #     arr_threshold,dims=('pair'),
     #     coords={'pair':date12List}
@@ -1607,7 +1298,7 @@ def unwrap_phase2azimuth_gradient(inps):
 
     # -----------------------
     # Analyze phase jump
-    analyze_phase_jump(inps, da_int_pct, da_CohPx_cts, da_med_abs_grad)
+    analyze_phase_jump(inps, da_sev_pct, da_CohPx_cts, da_med_abs_grad)
 
     # ---------------End Main Operations ---------------------------------#
 
@@ -1629,31 +1320,31 @@ def initiate_check(inps):
     # ---
     # 3D (time,azimuth,range)
     # subfix_grad='abs_az_grad_mm.nc'
-    # subfix_int='int.nc'
+    # subfix_sev='sev.nc'
 
     # 2D (time, azimuth)
-    subfix_int_pct = "int_pct.nc"
+    subfix_sev_pct = "sev_pct.nc"
     subfix_nna = "coh_cts.nc"
     subfix_med = "med_az_grad_mm.nc"
     # subfix_tre='treshold_mm.nc'
 
     if inps["pair"] == None:
         # inps['fn_abs_grad_2D'] = os.path.join(inps["out_dir"], subfix_grad )
-        # inps['fn_int']= os.path.join(inps["out_dir"], subfix_int)
+        # inps['fn_sev']= os.path.join(inps["out_dir"], subfix_sev)
         # ---
         inps["fn_pxCoh_cts"] = os.path.join(inps["out_dir"], subfix_nna)
-        inps["fn_int_pct"] = os.path.join(inps["out_dir"], subfix_int_pct)
+        inps["fn_sev_pct"] = os.path.join(inps["out_dir"], subfix_sev_pct)
         inps["fn_med_abs_grad"] = os.path.join(inps["out_dir"], subfix_med)
         # inps['fn_tre']=os.path.join(inps["out_dir"],subfix_tre)
     else:
         # inps['fn_abs_grad_2D'] = os.path.join(inps["out_dir"],inps['pair'] + "_"+subfix_grad)
-        # inps['fn_int'] = os.path.join(inps["out_dir"], inps['pair']+ "_"+subfix_int)
+        # inps['fn_sev'] = os.path.join(inps["out_dir"], inps['pair']+ "_"+subfix_sev)
         # ---
         inps["fn_pxCoh_cts"] = os.path.join(
             inps["out_dir"], inps["pair"] + "_" + subfix_nna
         )
-        inps["fn_int_pct"] = os.path.join(
-            inps["out_dir"], inps["pair"] + "_" + subfix_int_pct
+        inps["fn_sev_pct"] = os.path.join(
+            inps["out_dir"], inps["pair"] + "_" + subfix_sev_pct
         )
         inps["fn_med_abs_grad"] = os.path.join(
             inps["out_dir"], inps["pair"] + "_" + subfix_med
@@ -1695,9 +1386,7 @@ def initiate_check(inps):
             elif x1 <= inps["width"] - 1:
                 # Define the width
                 inps["width"] = x1 - x0
-                logging.info(
-                    "Calculations are done over AOI of %s pixels." % inps["width"]
-                )
+                logging.info("Calculations are done over AOI of %s pixels." % inps["width"])
             else:
                 logging.error("No valid subset coordinates.")
                 skip = True

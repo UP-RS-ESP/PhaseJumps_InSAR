@@ -1,6 +1,6 @@
 # PhaseJumps_InSAR
 
-Detecting phase jumps in unwrapped interferograms.
+Detecting phase jumps in unwrapped interferograms. Detailed manual (supplementary material) in [PhaseJumpDetector_documentation.pdf](PhaseJumpDetector_documentation.pdf)
 
 The code `calculate_phasejumps_from_mintpystack.py` identifies phase jumps in
 an existing Mintpy stack.
@@ -30,6 +30,6 @@ conda activate mintpy
 conda install -c conda-forge xarray pandas packaging netCDF4
 ```
 
-The python files `verify_IPF_version.py`, `create_list2exclude_interferograms_mintpy.py`, `ESD_calculate_stats_at_burst_overlap_level.py`, and `calculate_phasejumps_from_mintpystack.py` can be copied to a directory included in the path (or you add the PhaseJumps_ISCE directory to your path).
+The python files `verify_IPF_version.py`, `create_list2exclude_interferograms_mintpy.py`, `ESD_calculate_stats_at_burst_overlap_level.py`, and `calculate_phasejumps_from_mintpystack.py` can be copied to a directory included in the path. Alternatively, you can add the PhaseJumps_ISCE directory to your path.
 
 # 
