@@ -323,22 +323,6 @@ def plot_ind(arr_unw, arr_abs_grad, int_pct, min_pct, fn_out, date12, orbit):
     plt.close()
 
 
-def plot_after_before(arr_af, arr_bef):
-    fig_size = (16, 9)
-
-    title = "Pair (Mask Coherence)"
-
-    # Plot
-    fig, axs = plt.subplots(
-        ncols=3,
-        figsize=fig_size,
-        sharex=False,
-        sharey=True,
-        gridspec_kw={"width_ratios": [3, 3, 1]},
-    )
-    fig.subplots_adjust(top=0.8)
-
-
 def plot_time_series_pj(da_pj, pj_thr, date12List_Keep, date12List_Drop, out_dir):
     out_fig = os.path.join(out_dir, "timeserie_phase_jump.png")
 
@@ -385,7 +369,7 @@ def plot_time_series_pj(da_pj, pj_thr, date12List_Keep, date12List_Drop, out_dir
     )
 
     axs.set_xlabel("Pairs by Reference Date", fontsize=12)
-    axs.set_ylabel("Phase Jump [mm]", fontsize=12)
+    axs.set_ylabel("Cummulative Phase Jump [mm]", fontsize=12)
     axs.axhline(y=pj_thr, c=magenta, lw=0.75, zorder=0, label="Threshold")
     axs.set_ylim(0, np.ceil(np.nanmax(da_pj.data)) + 1)
 
@@ -945,7 +929,7 @@ def coarse_detection_pj(da, n_burst, length, inps):
         y_temp = list(np.where(arr_grad[i, :] > (3 * std_pair[i]))[0])
         if len(y_temp) > 0:
             yList.extend(y_temp)
-    print(np.nanmax(arr_grad), np.nanmin(arr_grad))
+    # print(np.nanmax(arr_grad), np.nanmin(arr_grad))
     # ------------------#
     # New figure April-2025
     out_fig = os.path.join(inps["out_dir_fig"], "detrended_intensity.png")
