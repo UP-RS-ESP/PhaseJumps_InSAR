@@ -41,4 +41,3 @@ The python files `verify_IPF_version.py`, `create_list2exclude_interferograms_mi
 ![Average coherence](figs/average_coherence_mask.png)
 ![Time Series output of SAR dates and their phase jump magnitudes](figs/timeseries_phase_jump.png)
 
-#
