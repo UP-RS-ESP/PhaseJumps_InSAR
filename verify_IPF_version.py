@@ -189,7 +189,7 @@ def reportSafe(safe_list):
             fl.write(string_out)
         #fl.close()
     else:
-        print("There is not images with IPF versions below 2.6")
+        print("There are no SAR scenes with IPF versions below 2.6")
 
 
 # First, Given an input directory check IPF versions of input scenes
