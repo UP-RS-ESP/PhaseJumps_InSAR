@@ -1,5 +1,9 @@
 # PhaseJumps_InSAR
 
+Source code and additional information to submitted manuscript:
+Viotto, S. and Bookhagen, B.: *Mitigating the impact of ionospheric and tropospheric delay on Sentinel-1 interferograms in northwestern Argentina*
+
+
 Detecting phase jumps in unwrapped interferograms. Detailed manual (supplementary material) in [PhaseJumpDetector_documentation.pdf](PhaseJumpDetector_documentation.pdf)
 
 The code `calculate_phasejumps_from_mintpystack.py` identifies phase jumps in
